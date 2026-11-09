@@ -11,11 +11,12 @@ use tracing::{info, warn};
 use crate::coord::CoordStore;
 use crate::grpc_bookie::RemoteBookie;
 use crate::meta_store::OxiaMetaStore;
+use crate::observe::SharedObserver;
 use crate::registry::{BookieInfo, BookieRegistry};
 use crate::task::{delete_task, list_tasks, try_lock, unlock, RereplicateTask};
 
 /// Worker configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WorkerConfig {
     /// How often to poll the under-replicated queue.
     pub poll_interval: Duration,
@@ -31,6 +32,22 @@ pub struct WorkerConfig {
     pub entry_interval: Duration,
     /// Max payload bytes copied per tick (`0` = unlimited). Stops mid-task to bound memory (#3408).
     pub max_copy_bytes_per_tick: usize,
+    /// Metrics / tracing sink.
+    pub observer: SharedObserver,
+}
+
+impl std::fmt::Debug for WorkerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkerConfig")
+            .field("poll_interval", &self.poll_interval)
+            .field("open_ledger_grace", &self.open_ledger_grace)
+            .field("local_bookie_id", &self.local_bookie_id)
+            .field("local_bookie_addr", &self.local_bookie_addr)
+            .field("max_tasks_per_tick", &self.max_tasks_per_tick)
+            .field("entry_interval", &self.entry_interval)
+            .field("max_copy_bytes_per_tick", &self.max_copy_bytes_per_tick)
+            .finish_non_exhaustive()
+    }
 }
 
 /// BookKeeper-style worker: target is always the local bookie.
@@ -82,6 +99,8 @@ impl<C: CoordStore + 'static> ReplicationWorker<C> {
         // Clamp so a misconfigured 0 still makes progress each tick.
         let limit = self.config.max_tasks_per_tick.max(1);
         let mut started = 0usize;
+        let mut waiting = 0u64;
+        let mut lock_busy = 0u64;
         let mut bytes_left = if self.config.max_copy_bytes_per_tick == 0 {
             None
         } else {
@@ -95,6 +114,7 @@ impl<C: CoordStore + 'static> ReplicationWorker<C> {
                 break;
             }
             if task.not_before_unix > now {
+                waiting += 1;
                 continue;
             }
             if !try_lock(
@@ -102,10 +122,14 @@ impl<C: CoordStore + 'static> ReplicationWorker<C> {
                 task.ledger_id,
                 &self.config.local_bookie_id,
             )? {
+                lock_busy += 1;
                 continue;
             }
             started += 1;
-            let result = self.process_task(&task, &local, &by_id, &mut bytes_left);
+            let started_at = std::time::Instant::now();
+            let mut copied = CopyStats::default();
+            let result =
+                self.process_task(&task, &local, &by_id, &mut bytes_left, &mut copied);
             unlock(self.coord.as_ref(), task.ledger_id);
             match result {
                 Ok(true) => {
@@ -113,15 +137,31 @@ impl<C: CoordStore + 'static> ReplicationWorker<C> {
                     info!(
                         ledger_id = task.ledger_id,
                         local = %self.config.local_bookie_id,
+                        entries = copied.entries,
+                        bytes = copied.bytes,
                         "rereplicate task completed"
+                    );
+                    self.config.observer.task_completed(
+                        task.ledger_id,
+                        copied.entries,
+                        copied.bytes,
+                        started_at.elapsed().as_secs_f64(),
                     );
                 }
                 Ok(false) => {
-                    // Still under-replicated elsewhere; leave task for other workers.
+                    self.config.observer.task_incomplete(task.ledger_id);
                 }
-                Err(err) => warn!(%err, ledger_id = task.ledger_id, "rereplicate failed"),
+                Err(err) => {
+                    warn!(%err, ledger_id = task.ledger_id, "rereplicate failed");
+                    self.config
+                        .observer
+                        .task_failed(task.ledger_id, &err.to_string());
+                }
             }
         }
+        self.config
+            .observer
+            .worker_tick(started as u64, waiting, lock_busy);
         Ok(())
     }
 
@@ -132,6 +172,7 @@ impl<C: CoordStore + 'static> ReplicationWorker<C> {
         local: &RemoteBookie,
         bookies: &HashMap<String, BookieInfo>,
         bytes_left: &mut Option<usize>,
+        copied: &mut CopyStats,
     ) -> Result<bool> {
         let mut meta = self.metas.get(task.ledger_id)?;
         // Match in-process rereplicate: ensure local storage exists before recoveryAdd.
@@ -158,7 +199,9 @@ impl<C: CoordStore + 'static> ReplicationWorker<C> {
                 bookies,
                 &task.missing_bookie,
                 bytes_left,
+                copied,
             )? {
+                self.config.observer.budget_hit(task.ledger_id);
                 return Ok(false);
             }
 
@@ -174,7 +217,10 @@ impl<C: CoordStore + 'static> ReplicationWorker<C> {
                     meta = updated;
                     changed = true;
                 }
-                Err(Error::VersionConflict(_)) => return Ok(false),
+                Err(Error::VersionConflict(_)) => {
+                    self.config.observer.cas_conflict(task.ledger_id);
+                    return Ok(false);
+                }
                 Err(err) => return Err(err),
             }
         }
@@ -219,6 +265,7 @@ impl<C: CoordStore + 'static> ReplicationWorker<C> {
         bookies: &HashMap<String, BookieInfo>,
         missing: &str,
         bytes_left: &mut Option<usize>,
+        copied: &mut CopyStats,
     ) -> Result<bool> {
         let frag = &meta.fragments[frag_idx];
         let start = frag.first_entry_id;
@@ -236,7 +283,8 @@ impl<C: CoordStore + 'static> ReplicationWorker<C> {
         while !copy_done(meta, entry_id, end_inclusive) {
             match read_from_sources(&sources, meta.ledger_id, entry_id) {
                 Some(entry) => {
-                    if charge_byte_budget(bytes_left, entry.payload.len()) {
+                    let nbytes = entry.payload.len();
+                    if charge_byte_budget(bytes_left, nbytes) {
                         return Ok(false);
                     }
                     local.recovery_add_entry(
@@ -246,6 +294,8 @@ impl<C: CoordStore + 'static> ReplicationWorker<C> {
                         entry.payload,
                         &meta.master_key,
                     )?;
+                    copied.entries += 1;
+                    copied.bytes += nbytes as u64;
                     if !self.config.entry_interval.is_zero() {
                         thread::sleep(self.config.entry_interval);
                     }
@@ -266,6 +316,12 @@ impl<C: CoordStore + 'static> ReplicationWorker<C> {
         }
         Ok(true)
     }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct CopyStats {
+    entries: u64,
+    bytes: u64,
 }
 
 fn needs_local_rereplicate(

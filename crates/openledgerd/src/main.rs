@@ -1,6 +1,7 @@
 //! openledgerd — local Bookie process for open-ledger.
 //!
-//! Opens a data directory and serves the Bookie gRPC API.
+//! Opens a data directory and serves the Bookie gRPC API plus an HTTP admin /
+//! metrics surface.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -9,13 +10,16 @@ use std::sync::Arc;
 use clap::Parser;
 use open_ledger::{Bookie, LocalBookie};
 use tonic::transport::Server;
-use tracing::{info, Level};
-use tracing_subscriber::EnvFilter;
+use tracing::info;
 
 mod grpc;
+mod http;
+mod logging;
+mod metrics;
 
 use grpc::pb::bookie_server::BookieServer;
 use grpc::BookieService;
+use metrics::Metrics;
 
 #[derive(Debug, Parser)]
 #[command(name = "openledgerd", about = "open-ledger bookie daemon")]
@@ -32,6 +36,10 @@ struct Args {
     #[arg(long, default_value = "0.0.0.0:3181")]
     listen: SocketAddr,
 
+    /// HTTP admin / metrics listen address (`/`, `/metrics`, `/ready`, `/live`).
+    #[arg(long, default_value = "0.0.0.0:3182")]
+    http: SocketAddr,
+
     /// Optional smoke: create ledger 1 and append one entry then exit.
     #[arg(long, default_value_t = false)]
     smoke: bool,
@@ -44,12 +52,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> open_ledger::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_max_level(Level::INFO)
-        .init();
+    logging::init();
 
     let args = Args::parse();
     if args.ready {
@@ -68,6 +71,9 @@ async fn main() -> open_ledger::Result<()> {
     );
 
     let bookie = Arc::new(LocalBookie::open(&args.data_dir, args.bookie_id.clone())?);
+    let metrics = Metrics::new()
+        .map_err(|e| open_ledger::Error::InvalidArgument(format!("metrics registry: {e}")))?;
+    metrics.refresh_gauges(&bookie.admin_snapshot(0));
 
     if args.smoke {
         let key = b"smoke";
@@ -79,9 +85,19 @@ async fn main() -> open_ledger::Result<()> {
         return Ok(());
     }
 
+    tokio::spawn({
+        let bookie = Arc::clone(&bookie);
+        let metrics = Arc::clone(&metrics);
+        async move {
+            if let Err(err) = http::serve(args.http, bookie, metrics).await {
+                tracing::error!(%err, "HTTP admin server exited");
+            }
+        }
+    });
+
     info!(%args.listen, "serving bookie gRPC");
     Server::builder()
-        .add_service(BookieServer::new(BookieService::new(bookie)))
+        .add_service(BookieServer::new(BookieService::new(bookie, metrics)))
         .serve(args.listen)
         .await
         .map_err(|e| open_ledger::Error::InvalidArgument(format!("grpc serve: {e}")))?;

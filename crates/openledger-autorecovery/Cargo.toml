@@ -11,6 +11,10 @@ path = "src/main.rs"
 
 [dependencies]
 open-ledger-oxia = { path = "../open-ledger-oxia", version = "0.1.0" }
+axum = { workspace = true }
 clap = { workspace = true }
+prometheus = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

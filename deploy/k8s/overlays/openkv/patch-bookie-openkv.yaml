@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bookie
+  namespace: open-ledger
+spec:
+  template:
+    spec:
+      containers:
+        - name: autorecovery
+          args:
+            - --coord-backend=openkv
+            - --openkv=openkv.open-ledger.svc.cluster.local:19000
+            - --openkv-ephemeral-ttl-secs=15
+            - --bookie-id=$(POD_NAME)
+            - --bookie-address=$(POD_NAME).bookie.open-ledger.svc.cluster.local:3181
+            - --local-bookie-addr=127.0.0.1:3181
+            - --http=0.0.0.0:3183
+            - --lost-bookie-delay-secs=15
+            - --open-ledger-grace-secs=5
+            - --worker-max-tasks-per-tick=4
+            - --worker-entry-interval-ms=0
+            - --worker-max-copy-bytes-per-tick=67108864
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: COORD_BACKEND
+              value: openkv
+            - name: OPENKV_ADDR
+              value: openkv.open-ledger.svc.cluster.local:19000
+            - name: RUST_LOG
+              value: info
+            - name: RUST_LOG_FORMAT
+              value: json

@@ -1,0 +1,131 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openledger-grafana-dashboard
+  namespace: open-ledger
+  labels:
+    grafana_dashboard: "1"
+data:
+  openledger.json: |
+    {
+      "title": "open-ledger",
+      "uid": "openledger",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "15s",
+      "tags": ["open-ledger"],
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "Bookie write QPS",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "targets": [
+            {
+              "expr": "sum by (method) (rate(openledger_bookie_rpc_total{method=~\"AddEntry|RecoveryAddEntry\",result=\"ok\"}[1m]))",
+              "legendFormat": "{{ method }}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "Bookie RPC p99 latency",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (le, method) (rate(openledger_bookie_rpc_duration_seconds_bucket[5m])))",
+              "legendFormat": "{{ method }}"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "Bookie RPC errors",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "targets": [
+            {
+              "expr": "sum by (method, error_kind) (rate(openledger_bookie_rpc_errors_total[1m]))",
+              "legendFormat": "{{ method }} {{ error_kind }}"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "Journal bytes",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "targets": [
+            {
+              "expr": "openledger_bookie_journal_bytes",
+              "legendFormat": "{{ instance }}"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "stat",
+          "title": "Alive bookies",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 16 },
+          "targets": [
+            { "expr": "openledger_cluster_alive_bookies", "legendFormat": "alive" }
+          ]
+        },
+        {
+          "id": 6,
+          "type": "stat",
+          "title": "Ledger metas",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 16 },
+          "targets": [
+            { "expr": "openledger_cluster_ledger_metas", "legendFormat": "ledgers" }
+          ]
+        },
+        {
+          "id": 7,
+          "type": "stat",
+          "title": "Under-replicated",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 16 },
+          "targets": [
+            { "expr": "openledger_cluster_underreplicated_tasks", "legendFormat": "ur" }
+          ]
+        },
+        {
+          "id": 8,
+          "type": "timeseries",
+          "title": "AR copy progress",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+          "targets": [
+            {
+              "expr": "sum(rate(openledger_ar_copy_entries_total[1m]))",
+              "legendFormat": "entries/s"
+            },
+            {
+              "expr": "sum(rate(openledger_ar_copy_bytes_total[1m]))",
+              "legendFormat": "bytes/s"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "type": "timeseries",
+          "title": "AR task outcomes",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+          "targets": [
+            {
+              "expr": "sum(rate(openledger_ar_tasks_completed_total[1m]))",
+              "legendFormat": "completed"
+            },
+            {
+              "expr": "sum(rate(openledger_ar_tasks_failed_total[1m]))",
+              "legendFormat": "failed"
+            },
+            {
+              "expr": "sum(rate(openledger_ar_tasks_incomplete_total[1m]))",
+              "legendFormat": "incomplete"
+            }
+          ]
+        }
+      ]
+    }

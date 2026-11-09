@@ -1,4 +1,4 @@
-//! Coordination store abstraction (Oxia or in-memory).
+//! Coordination store abstraction (Oxia, OpenKV, or in-memory).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};

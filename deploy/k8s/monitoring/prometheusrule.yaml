@@ -1,0 +1,66 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: openledger
+  namespace: open-ledger
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: openledger.bookie
+      rules:
+        - alert: OpenLedgerBookieNotReady
+          expr: up{job=~".*bookie.*", endpoint="http"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Bookie metrics scrape down"
+            description: "Prometheus cannot scrape bookie /metrics for {{ $labels.instance }}."
+
+        - alert: OpenLedgerBookieRpcErrors
+          expr: |
+            sum by (method) (rate(openledger_bookie_rpc_errors_total[5m]))
+              /
+            clamp_min(sum by (method) (rate(openledger_bookie_rpc_total[5m])), 1e-9)
+              > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Bookie RPC error rate high ({{ $labels.method }})"
+            description: "Error rate > 5% for method {{ $labels.method }} over 5m."
+
+        - alert: OpenLedgerBookieRpcLatency
+          expr: |
+            histogram_quantile(0.99,
+              sum by (le, method) (rate(openledger_bookie_rpc_duration_seconds_bucket[5m]))
+            ) > 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Bookie RPC p99 > 1s ({{ $labels.method }})"
+
+    - name: openledger.cluster
+      rules:
+        - alert: OpenLedgerAliveBookiesLow
+          expr: openledger_cluster_alive_bookies < 3
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Alive bookies below quorum floor"
+            description: "Only {{ $value }} alive bookies registered in Oxia (expected ≥ 3 for E=3 tests / ≥ 8 for full STS)."
+
+        - alert: OpenLedgerUnderreplicatedStuck
+          expr: |
+            openledger_cluster_underreplicated_tasks > 0
+            and
+            increase(openledger_ar_tasks_completed_total[15m]) == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Under-replicated queue not draining"
+            description: "{{ $value }} UR tasks present with no AR completions in 15m."

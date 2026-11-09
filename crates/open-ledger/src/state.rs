@@ -78,6 +78,10 @@ impl BookieState {
         self.ledgers.iter()
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.ledgers.len()
+    }
+
     pub(crate) fn insert_loaded(&mut self, ledger_id: LedgerId, ledger: LedgerMem) {
         self.ledgers.insert(ledger_id, ledger);
     }

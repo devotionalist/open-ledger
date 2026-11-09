@@ -8,6 +8,10 @@ metadata:
   namespace: open-ledger
   labels:
     app: bookie
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "3182"
+    prometheus.io/path: /metrics
 spec:
   clusterIP: None
   selector:
@@ -16,6 +20,12 @@ spec:
     - name: bookie
       port: 3181
       targetPort: bookie
+    - name: http
+      port: 3182
+      targetPort: http
+    - name: ar-http
+      port: 3183
+      targetPort: ar-http
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -55,20 +65,26 @@ spec:
                   fieldPath: metadata.name
             - name: RUST_LOG
               value: info
+            - name: RUST_LOG_FORMAT
+              value: json
           ports:
             - name: bookie
               containerPort: 3181
+            - name: http
+              containerPort: 3182
           volumeMounts:
             - name: data
               mountPath: /data
           readinessProbe:
-            tcpSocket:
-              port: bookie
+            httpGet:
+              path: /ready
+              port: http
             initialDelaySeconds: 1
             periodSeconds: 5
           livenessProbe:
-            tcpSocket:
-              port: bookie
+            httpGet:
+              path: /live
+              port: http
             initialDelaySeconds: 2
             periodSeconds: 10
           resources:
@@ -85,6 +101,7 @@ spec:
             - --bookie-id=$(POD_NAME)
             - --bookie-address=$(POD_NAME).bookie.open-ledger.svc.cluster.local:3181
             - --local-bookie-addr=127.0.0.1:3181
+            - --http=0.0.0.0:3183
             - --lost-bookie-delay-secs=15
             - --open-ledger-grace-secs=5
             - --worker-max-tasks-per-tick=4
@@ -97,6 +114,23 @@ spec:
                   fieldPath: metadata.name
             - name: RUST_LOG
               value: info
+            - name: RUST_LOG_FORMAT
+              value: json
+          ports:
+            - name: ar-http
+              containerPort: 3183
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: ar-http
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: ar-http
+            initialDelaySeconds: 2
+            periodSeconds: 10
           resources:
             requests:
               cpu: 50m

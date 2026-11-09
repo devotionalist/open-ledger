@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::coord::{CoordStore, PutExpect};
+use crate::observe::{noop_observer, SharedObserver};
 
 /// Bookie registration payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,23 +24,31 @@ pub struct BookieInfo {
 /// Lists live bookies and can keep a local registration alive.
 pub struct BookieRegistry<C: CoordStore> {
     coord: Arc<C>,
+    observer: SharedObserver,
 }
 
 impl<C: CoordStore + 'static> BookieRegistry<C> {
     /// Share a coordination store.
     pub fn new(coord: Arc<C>) -> Self {
-        Self { coord }
+        Self::with_observer(coord, noop_observer())
+    }
+
+    /// Share a coordination store with metrics.
+    pub fn with_observer(coord: Arc<C>, observer: SharedObserver) -> Self {
+        Self { coord, observer }
     }
 
     /// Register / refresh this bookie as an ephemeral record.
     pub fn register(&self, info: &BookieInfo) -> Result<()> {
         let bytes = serde_json::to_vec(info).map_err(|e| Error::Codec(e.to_string()))?;
-        self.coord.put(
+        let result = self.coord.put(
             &keys::bookie_key(&info.bookie_id),
             &bytes,
             PutExpect::Any,
             true,
-        )?;
+        );
+        self.observer.registry_heartbeat(result.is_ok());
+        result?;
         Ok(())
     }
 

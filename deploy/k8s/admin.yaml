@@ -1,0 +1,75 @@
+# Cluster admin: Oxia coordination-plane gauges + multi-bookie overview UI.
+apiVersion: v1
+kind: Service
+metadata:
+  name: openledger-admin
+  namespace: open-ledger
+  labels:
+    app: openledger-admin
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: /metrics
+spec:
+  selector:
+    app: openledger-admin
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openledger-admin
+  namespace: open-ledger
+  labels:
+    app: openledger-admin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openledger-admin
+  template:
+    metadata:
+      labels:
+        app: openledger-admin
+    spec:
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+      containers:
+        - name: admin
+          image: docker.io/library/openledger-admin:local
+          imagePullPolicy: Never
+          args:
+            - --oxia=oxia.open-ledger.svc.cluster.local:6648
+            - --listen=0.0.0.0:8080
+            - --refresh-secs=5
+          env:
+            - name: RUST_LOG
+              value: info
+            - name: RUST_LOG_FORMAT
+              value: json
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 128Mi

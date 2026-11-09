@@ -10,21 +10,33 @@ use open_ledger::{Error, Result};
 use tracing::{info, warn};
 
 use crate::coord::{CoordStore, PutExpect};
+use crate::observe::{noop_observer, SharedObserver};
 
 /// Tries to hold `/open-ledger/election/auditor` as an ephemeral record.
 pub struct AuditorElection<C: CoordStore> {
     coord: Arc<C>,
     identity: String,
     is_leader: Arc<AtomicBool>,
+    observer: SharedObserver,
 }
 
 impl<C: CoordStore + 'static> AuditorElection<C> {
     /// Create an election helper. `identity` should identify this autorecovery process.
     pub fn new(coord: Arc<C>, identity: impl Into<String>) -> Self {
+        Self::with_observer(coord, identity, noop_observer())
+    }
+
+    /// Create with a metrics observer.
+    pub fn with_observer(
+        coord: Arc<C>,
+        identity: impl Into<String>,
+        observer: SharedObserver,
+    ) -> Self {
         Self {
             coord,
             identity: identity.into(),
             is_leader: Arc::new(AtomicBool::new(false)),
+            observer,
         }
     }
 
@@ -90,16 +102,17 @@ impl<C: CoordStore + 'static> AuditorElection<C> {
 
     fn set_leader(&self, leader: bool) {
         self.is_leader.store(leader, Ordering::SeqCst);
+        self.observer.set_auditor_leader(leader);
     }
 
     /// Interpret a put result as leadership claim success / contended / hard error.
     fn apply_claim(&self, result: Result<i64>, announce: bool) -> Result<()> {
         match result {
             Ok(_) => {
-                if announce && !self.is_leader.swap(true, Ordering::SeqCst) {
+                let was = self.is_leader.swap(true, Ordering::SeqCst);
+                self.observer.set_auditor_leader(true);
+                if announce && !was {
                     info!(identity = %self.identity, "became auditor leader");
-                } else {
-                    self.set_leader(true);
                 }
                 Ok(())
             }

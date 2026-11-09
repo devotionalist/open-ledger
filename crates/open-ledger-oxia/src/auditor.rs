@@ -11,16 +11,28 @@ use open_ledger::{LedgerMeta, Result};
 use tracing::{info, warn};
 
 use crate::coord::CoordStore;
+use crate::observe::SharedObserver;
 use crate::registry::BookieRegistry;
 use crate::task::{enqueue_task, RereplicateTask};
 
 /// Auditor configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AuditorConfig {
     /// Delay before publishing tasks after a bookie disappears.
     pub lost_bookie_delay: Duration,
     /// How often to scan when leader.
     pub scan_interval: Duration,
+    /// Metrics / tracing sink.
+    pub observer: SharedObserver,
+}
+
+impl std::fmt::Debug for AuditorConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuditorConfig")
+            .field("lost_bookie_delay", &self.lost_bookie_delay)
+            .field("scan_interval", &self.scan_interval)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for AuditorConfig {
@@ -28,6 +40,7 @@ impl Default for AuditorConfig {
         Self {
             lost_bookie_delay: Duration::from_secs(30),
             scan_interval: Duration::from_secs(5),
+            observer: crate::observe::noop_observer(),
         }
     }
 }
@@ -109,6 +122,9 @@ impl<C: CoordStore + 'static> Auditor<C> {
                 missing_bookie = %missing,
                 "enqueued underreplicated task"
             );
+            self.config
+                .observer
+                .task_enqueued(meta.ledger_id, missing);
         }
         Ok(())
     }
@@ -187,6 +203,7 @@ mod tests {
             AuditorConfig {
                 lost_bookie_delay: Duration::from_secs(0),
                 scan_interval: Duration::from_millis(1),
+                ..AuditorConfig::default()
             },
         );
         auditor.on_bookie_lost("b1").unwrap();

@@ -3,7 +3,7 @@ name = "open-ledger-oxia"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Oxia-backed LedgerMetaStore, bookie registry, and AutoRecovery"
+description = "Oxia/OpenKV-backed LedgerMetaStore, bookie registry, and AutoRecovery"
 readme = "../../README.md"
 
 [dependencies]

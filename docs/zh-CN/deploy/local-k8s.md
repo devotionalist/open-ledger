@@ -5,9 +5,12 @@
 
 把 `openledgerd` + `openledger-autorecovery` 跑在本机 k3s 上，并用 Oxia 存 ledger metadata / AutoRecovery 协调状态。
 
-- `openledgerd`：`0.0.0.0:3181` Bookie gRPC；Pod Ready = TCP `3181` 在听。
-- sidecar：连 Oxia，注册本机 bookie，选 Auditor，对本机补副本。
-- Oxia：standalone，`:6648`。
+- `openledgerd`：gRPC `:3181`；HTTP 管理/指标 `:3182`（`/`、`/metrics`、`/ready`、`/live`）。
+- sidecar（`openledger-autorecovery`）：Oxia 注册 + Auditor/Worker；HTTP 指标/探针 `:3183`。
+- `openledger-admin`：集群 UI + 协调面 gauges，`:8080`。
+- 协调（默认）：Oxia standalone `:6648`（`COORD_BACKEND=oxia`）。
+- 可选：OpenKV Gateway `:19000`，用 `deploy/k8s/overlays/openkv`（`COORD_BACKEND=openkv`）。
+- 日志：集群内 `RUST_LOG_FORMAT=json`。
 
 集群是 Colima 的 `docker+k3s`（`kubectl` context `colima`）。磁盘用默认 `local-path` StorageClass。
 
@@ -36,7 +39,14 @@ docker build -f Dockerfile.autorecovery -t openledger-autorecovery:local .
 docker save openledger-autorecovery:local | colima ssh -- sudo k3s ctr images import -
 ```
 
-节点上的名字是 `docker.io/library/openledgerd:local` 与 `docker.io/library/openledger-autorecovery:local`。StatefulSet 使用 `imagePullPolicy: Never`。
+### 集群管理（Docker → debian slim）
+
+```bash
+docker build -f Dockerfile.admin -t openledger-admin:local .
+docker save openledger-admin:local | colima ssh -- sudo k3s ctr images import -
+```
+
+节点镜像名：`openledgerd:local`、`openledger-autorecovery:local`、`openledger-admin:local`。工作负载使用 `imagePullPolicy: Never`。
 
 ## 部署
 
@@ -44,11 +54,25 @@ docker save openledger-autorecovery:local | colima ssh -- sudo k3s ctr images im
 kubectl apply -k deploy/k8s
 kubectl -n open-ledger rollout status statefulset/oxia
 kubectl -n open-ledger rollout status statefulset/bookie
+kubectl -n open-ledger rollout status deployment/openledger-admin
 kubectl -n open-ledger get pods -o wide
+```
+
+可选 OpenKV 协调后端（Gateway 需已可达 `openkv:19000`）：
+
+```bash
+kubectl apply -k deploy/k8s/overlays/openkv
+```
+
+可选 Prometheus Operator 包（ServiceMonitor / 告警 / Grafana dashboard）：
+
+```bash
+kubectl apply -k deploy/k8s/monitoring
 ```
 
 - Oxia：`oxia-0`
 - Bookie×8：`bookie-0`…`bookie-7`，每 Pod 两容器；`--bookie-id` / registry 用 Pod 名；每副本一块 1Gi PVC。主测试 quorum `E=8,Qw=3,Qa=2`。
+- Admin：`openledger-admin` Deployment。
 
 ## 确认
 
@@ -56,7 +80,9 @@ kubectl -n open-ledger get pods -o wide
 kubectl -n open-ledger exec bookie-0 -c openledgerd -- /usr/local/bin/openledgerd --data-dir=/data --ready
 kubectl -n open-ledger logs bookie-0 -c openledgerd
 kubectl -n open-ledger logs bookie-0 -c autorecovery
-kubectl -n open-ledger port-forward pod/bookie-0 13181:3181
+kubectl -n open-ledger port-forward pod/bookie-0 13181:3181 13182:3182 13183:3183
+kubectl -n open-ledger port-forward svc/openledger-admin 18080:8080
+# 然后打开 http://127.0.0.1:18080/ 与 http://127.0.0.1:13182/
 ```
 
 ## 故障测试

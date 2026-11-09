@@ -34,6 +34,36 @@ struct Inner {
     journal_len: u64,
 }
 
+/// One ledger row in an admin snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LedgerSummary {
+    /// Ledger id.
+    pub ledger_id: LedgerId,
+    /// Whether this bookie has fenced the ledger.
+    pub fenced: bool,
+    /// Number of entries stored locally (may be gapped).
+    pub entry_count: usize,
+    /// Highest local entry id, or `-1`.
+    pub last_entry_id: i64,
+    /// Local `readLastConfirmed` value.
+    pub lac: i64,
+}
+
+/// Bookie admin view for HTTP status / metrics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminSnapshot {
+    /// Cookie bookie id.
+    pub bookie_id: BookieId,
+    /// Durable journal length in bytes.
+    pub journal_len: u64,
+    /// Ledgers present in memory.
+    pub ledger_count: usize,
+    /// How many of those ledgers are fenced.
+    pub fenced_count: usize,
+    /// Per-ledger rows (capped by the caller).
+    pub ledgers: Vec<LedgerSummary>,
+}
+
 /// Single-node bookie with a durable journal.
 pub struct LocalBookie {
     root: PathBuf,
@@ -113,6 +143,53 @@ impl LocalBookie {
     /// This bookie's id (cookie).
     pub fn bookie_id(&self) -> &str {
         &self.bookie_id
+    }
+
+    /// Data-directory root (journal + ledgers).
+    pub fn data_dir(&self) -> &Path {
+        &self.root
+    }
+
+    /// Snapshot for admin / metrics (in-memory state; not a disk walk).
+    pub fn admin_snapshot(&self, max_ledgers: usize) -> AdminSnapshot {
+        let g = self.inner.lock().expect("local bookie");
+        let ledger_count = g.state.len();
+        let mut ledgers = Vec::new();
+        let mut fenced_count = 0usize;
+        for (id, led) in g.state.iter() {
+            if led.fenced {
+                fenced_count += 1;
+            }
+            if ledgers.len() < max_ledgers {
+                let last_entry_id = led
+                    .entries
+                    .keys()
+                    .next_back()
+                    .copied()
+                    .map(|e| e as i64)
+                    .unwrap_or(-1);
+                let piggy = led
+                    .entries
+                    .values()
+                    .next_back()
+                    .map(|e| e.lac)
+                    .unwrap_or(-1);
+                ledgers.push(LedgerSummary {
+                    ledger_id: *id,
+                    fenced: led.fenced,
+                    entry_count: led.entries.len(),
+                    last_entry_id,
+                    lac: led.explicit_lac.max(piggy),
+                });
+            }
+        }
+        AdminSnapshot {
+            bookie_id: self.bookie_id.clone(),
+            journal_len: g.journal_len,
+            ledger_count,
+            fenced_count,
+            ledgers,
+        }
     }
 
     fn commit(&self, rec: Rec) -> Result<()> {

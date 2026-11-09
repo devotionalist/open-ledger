@@ -1,0 +1,18 @@
+# Optional: point open-ledger at an OpenKV Gateway Service in this namespace.
+# Create the actual OpenKV cluster with its own Helm/compose; this only documents
+# the expected Service name used by overlays/openkv.
+apiVersion: v1
+kind: Service
+metadata:
+  name: openkv
+  namespace: open-ledger
+  labels:
+    app: openkv
+spec:
+  # Replace with ExternalName / Endpoints to a real Gateway, or omit this file
+  # and create `openkv` yourself.
+  type: ExternalName
+  externalName: openkv-gateway.default.svc.cluster.local
+  ports:
+    - name: grpc
+      port: 19000

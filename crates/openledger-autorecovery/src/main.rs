@@ -1,23 +1,42 @@
 //! Colocated AutoRecovery: bookie registry heartbeat, auditor election,
 //! auditor scan, and a ReplicationWorker targeting the local bookie.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
 use open_ledger_oxia::{
-    Auditor, AuditorConfig, AuditorElection, BookieInfo, BookieRegistry, OxiaCoord,
-    ReplicationWorker, WorkerConfig,
+    connect_coord, Auditor, AuditorConfig, AuditorElection, BookieInfo, BookieRegistry,
+    CoordBackend, ReplicationWorker, WorkerConfig,
 };
 use tracing::{info, warn};
+
+mod http;
+mod logging;
+mod metrics;
+
+use metrics::ArMetrics;
 
 #[derive(Debug, Parser)]
 #[command(name = "openledger-autorecovery")]
 #[command(about = "BookKeeper-style AutoRecovery sidecar for open-ledger")]
 struct Args {
-    /// Oxia service address (`host:port`).
+    /// Coordination backend: `oxia` (default) or `openkv`.
+    #[arg(long, env = "COORD_BACKEND", default_value = "oxia")]
+    coord_backend: String,
+
+    /// Oxia service address (`host:port`). Used when `--coord-backend=oxia`.
     #[arg(long, env = "OXIA_SERVICE", default_value = "oxia:6648")]
     oxia: String,
+
+    /// OpenKV Gateway address (`host:port`). Used when `--coord-backend=openkv`.
+    #[arg(long, env = "OPENKV_ADDR", default_value = "openkv:19000")]
+    openkv: String,
+
+    /// OpenKV ephemeral TTL (registry / election / locks). Ignored for Oxia.
+    #[arg(long, env = "OPENKV_EPHEMERAL_TTL_SECS", default_value = "15")]
+    openkv_ephemeral_ttl_secs: u64,
 
     /// Local bookie id (usually the StatefulSet pod name).
     #[arg(long, env = "BOOKIE_ID")]
@@ -34,6 +53,10 @@ struct Args {
     /// Identity used for auditor election (defaults to bookie id).
     #[arg(long, env = "AUDITOR_IDENTITY")]
     auditor_identity: Option<String>,
+
+    /// HTTP admin / metrics listen address.
+    #[arg(long, default_value = "0.0.0.0:3183")]
+    http: SocketAddr,
 
     /// lostBookieRecoveryDelay.
     #[arg(long, default_value = "30")]
@@ -65,33 +88,43 @@ struct Args {
 }
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    logging::init();
 
     let args = Args::parse();
     let identity = args
         .auditor_identity
         .unwrap_or_else(|| args.bookie_id.clone());
     let heartbeat = Duration::from_secs(args.heartbeat_secs);
+    let metrics = ArMetrics::new().unwrap_or_else(|err| panic!("metrics: {err}"));
+    let observer = Arc::clone(&metrics) as open_ledger_oxia::SharedObserver;
 
+    let backend = CoordBackend::parse(&args.coord_backend).unwrap_or_else(|err| {
+        panic!("{err}");
+    });
     info!(
+        coord_backend = ?backend,
         oxia = %args.oxia,
+        openkv = %args.openkv,
         bookie_id = %args.bookie_id,
         bookie_address = %args.bookie_address,
+        http = %args.http,
         "starting openledger-autorecovery"
     );
 
-    let coord = Arc::new(
-        OxiaCoord::connect(&args.oxia).unwrap_or_else(|err| {
-            panic!("oxia connect failed: {err}");
-        }),
-    );
+    http::spawn(args.http, args.bookie_id.clone(), Arc::clone(&metrics));
 
-    let registry = Arc::new(BookieRegistry::new(Arc::clone(&coord)));
+    let coord = connect_coord(
+        backend,
+        &args.oxia,
+        &args.openkv,
+        Duration::from_secs(args.openkv_ephemeral_ttl_secs.max(1)),
+    )
+    .unwrap_or_else(|err| panic!("coord connect failed: {err}"));
+
+    let registry = Arc::new(BookieRegistry::with_observer(
+        Arc::clone(&coord),
+        Arc::clone(&observer),
+    ));
     let info = BookieInfo {
         bookie_id: args.bookie_id.clone(),
         address: args.bookie_address,
@@ -101,20 +134,25 @@ fn main() {
     }
     registry.spawn_heartbeat(info, heartbeat);
 
-    let election = Arc::new(AuditorElection::new(Arc::clone(&coord), identity));
+    let election = Arc::new(AuditorElection::with_observer(
+        Arc::clone(&coord),
+        identity,
+        Arc::clone(&observer),
+    ));
     election.spawn(heartbeat);
 
-    let auditor = Arc::new(Auditor::new(
+    Arc::new(Auditor::new(
         Arc::clone(&coord),
         election.leader_flag(),
         AuditorConfig {
             lost_bookie_delay: Duration::from_secs(args.lost_bookie_delay_secs),
             scan_interval: heartbeat,
+            observer: Arc::clone(&observer),
         },
-    ));
-    auditor.spawn();
+    ))
+    .spawn();
 
-    let worker = Arc::new(ReplicationWorker::new(
+    Arc::new(ReplicationWorker::new(
         Arc::clone(&coord),
         WorkerConfig {
             poll_interval: Duration::from_secs(args.worker_poll_secs),
@@ -124,11 +162,11 @@ fn main() {
             max_tasks_per_tick: args.worker_max_tasks_per_tick.max(1),
             entry_interval: Duration::from_millis(args.worker_entry_interval_ms),
             max_copy_bytes_per_tick: args.worker_max_copy_bytes_per_tick,
+            observer,
         },
-    ));
-    worker.spawn();
+    ))
+    .spawn();
 
-    // Park forever; background threads do the work.
     loop {
         std::thread::park();
     }

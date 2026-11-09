@@ -1,0 +1,58 @@
+# Requires Prometheus Operator (ServiceMonitor CRD).
+# Apply with: kubectl apply -k deploy/k8s/monitoring
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: openledger-bookie
+  namespace: open-ledger
+  labels:
+    release: prometheus
+spec:
+  namespaceSelector:
+    matchNames:
+      - open-ledger
+  selector:
+    matchLabels:
+      app: bookie
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: openledger-autorecovery
+  namespace: open-ledger
+  labels:
+    release: prometheus
+spec:
+  namespaceSelector:
+    matchNames:
+      - open-ledger
+  selector:
+    matchLabels:
+      app: bookie
+  endpoints:
+    - port: ar-http
+      path: /metrics
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: openledger-admin
+  namespace: open-ledger
+  labels:
+    release: prometheus
+spec:
+  namespaceSelector:
+    matchNames:
+      - open-ledger
+  selector:
+    matchLabels:
+      app: openledger-admin
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

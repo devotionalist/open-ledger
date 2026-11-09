@@ -1,12 +1,16 @@
 //! gRPC Bookie service over [`LocalBookie`].
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::Bytes;
 use open_ledger::{Bookie, Error, LocalBookie};
 use prost::Message;
 use prost_types::Any;
 use tonic::{Request, Response, Status};
+use tracing::Instrument;
+
+use crate::metrics::Metrics;
 
 /// Wire shape of `google.rpc.Status` (grpc-status-details-bin).
 #[derive(Clone, PartialEq, Message)]
@@ -30,12 +34,105 @@ use pb::*;
 /// Wraps a durable local bookie for tonic.
 pub struct BookieService {
     bookie: Arc<LocalBookie>,
+    metrics: Arc<Metrics>,
 }
 
 impl BookieService {
-    /// Serve RPCs against `bookie`.
-    pub fn new(bookie: Arc<LocalBookie>) -> Self {
-        Self { bookie }
+    /// Serve RPCs against `bookie`, recording Prometheus metrics.
+    pub fn new(bookie: Arc<LocalBookie>, metrics: Arc<Metrics>) -> Self {
+        Self { bookie, metrics }
+    }
+
+    /// Run a bookie call on a blocking thread with span + metrics.
+    ///
+    /// `fixed_bytes` is recorded on both success and failure (write paths).
+    /// `bytes_from_ok` supplies payload size only after a successful read.
+    #[allow(clippy::result_large_err)]
+    async fn run_rpc<T, F, B>(
+        &self,
+        method: &'static str,
+        ledger_id: Option<u64>,
+        entry_id: Option<u64>,
+        fixed_bytes: Option<(u64, &'static str)>,
+        f: F,
+        bytes_from_ok: B,
+    ) -> Result<T, Status>
+    where
+        T: Send + 'static,
+        F: FnOnce(&LocalBookie) -> open_ledger::Result<T> + Send + 'static,
+        B: FnOnce(&T) -> Option<(u64, &'static str)>,
+    {
+        let span = tracing::info_span!(
+            "bookie.rpc",
+            otel.kind = "server",
+            rpc = method,
+            ledger_id = ledger_id,
+            entry_id = entry_id,
+        );
+        let bookie = Arc::clone(&self.bookie);
+        let metrics = Arc::clone(&self.metrics);
+        async move {
+            let started = Instant::now();
+            let raw = tokio::task::spawn_blocking(move || f(&bookie))
+                .await
+                .map_err(|e| Status::internal(format!("join: {e}")))?;
+            match raw {
+                Ok(v) => {
+                    let bytes = fixed_bytes.or_else(|| bytes_from_ok(&v));
+                    metrics.observe_rpc(method, true, None, bytes, started);
+                    Ok(v)
+                }
+                Err(err) => {
+                    let kind = error_kind(&err);
+                    tracing::warn!(
+                        method,
+                        ledger_id,
+                        entry_id,
+                        error_kind = kind,
+                        err = %err,
+                        "bookie rpc failed"
+                    );
+                    metrics.observe_rpc(method, false, Some(kind), fixed_bytes, started);
+                    Err(map_err(err))
+                }
+            }
+        }
+        .instrument(span)
+        .await
+    }
+
+    #[allow(clippy::result_large_err)]
+    async fn run_rpc_simple<T, F>(
+        &self,
+        method: &'static str,
+        ledger_id: Option<u64>,
+        entry_id: Option<u64>,
+        fixed_bytes: Option<(u64, &'static str)>,
+        f: F,
+    ) -> Result<T, Status>
+    where
+        T: Send + 'static,
+        F: FnOnce(&LocalBookie) -> open_ledger::Result<T> + Send + 'static,
+    {
+        self.run_rpc(method, ledger_id, entry_id, fixed_bytes, f, |_| None)
+            .await
+    }
+}
+
+fn error_kind(err: &Error) -> &'static str {
+    match err {
+        Error::AlreadyExists(_) => "AlreadyExists",
+        Error::NotFound(_) => "NotFound",
+        Error::NoSuchEntry { .. } => "NoSuchEntry",
+        Error::Conflict { .. } => "Conflict",
+        Error::Fenced(_) => "Fenced",
+        Error::Unauthorized(_) => "Unauthorized",
+        Error::VersionConflict(_) => "VersionConflict",
+        Error::MetaConflict(_) => "MetaConflict",
+        Error::NotEnoughBookies => "NotEnoughBookies",
+        Error::InvalidArgument(_) => "InvalidArgument",
+        Error::Io(_) => "Io",
+        Error::Codec(_) => "Codec",
     }
 }
 
@@ -151,19 +248,6 @@ fn to_pb_entry(e: open_ledger::Entry) -> Entry {
     }
 }
 
-#[allow(clippy::result_large_err)]
-async fn run_blocking<T, F>(bookie: &Arc<LocalBookie>, f: F) -> Result<T, Status>
-where
-    T: Send + 'static,
-    F: FnOnce(&LocalBookie) -> open_ledger::Result<T> + Send + 'static,
-{
-    let bookie = Arc::clone(bookie);
-    tokio::task::spawn_blocking(move || f(&bookie))
-        .await
-        .map_err(|e| Status::internal(format!("join: {e}")))?
-        .map_err(map_err)
-}
-
 #[tonic::async_trait]
 impl BookieRpc for BookieService {
     async fn create_ledger(
@@ -171,7 +255,15 @@ impl BookieRpc for BookieService {
         req: Request<CreateLedgerRequest>,
     ) -> Result<Response<CreateLedgerResponse>, Status> {
         let r = req.into_inner();
-        run_blocking(&self.bookie, move |b| b.create_ledger(r.ledger_id, &r.master_key)).await?;
+        let ledger_id = r.ledger_id;
+        self.run_rpc_simple(
+            "CreateLedger",
+            Some(ledger_id),
+            None,
+            None,
+            move |b| b.create_ledger(ledger_id, &r.master_key),
+        )
+        .await?;
         Ok(Response::new(CreateLedgerResponse {}))
     }
 
@@ -180,15 +272,24 @@ impl BookieRpc for BookieService {
         req: Request<AddEntryRequest>,
     ) -> Result<Response<AddEntryResponse>, Status> {
         let r = req.into_inner();
-        run_blocking(&self.bookie, move |b| {
-            b.add_entry(
-                r.ledger_id,
-                r.entry_id,
-                r.lac,
-                Bytes::from(r.payload),
-                &r.master_key,
-            )
-        })
+        let nbytes = r.payload.len() as u64;
+        let ledger_id = r.ledger_id;
+        let entry_id = r.entry_id;
+        self.run_rpc_simple(
+            "AddEntry",
+            Some(ledger_id),
+            Some(entry_id),
+            Some((nbytes, "in")),
+            move |b| {
+                b.add_entry(
+                    ledger_id,
+                    entry_id,
+                    r.lac,
+                    Bytes::from(r.payload),
+                    &r.master_key,
+                )
+            },
+        )
         .await?;
         Ok(Response::new(AddEntryResponse {}))
     }
@@ -198,15 +299,24 @@ impl BookieRpc for BookieService {
         req: Request<RecoveryAddEntryRequest>,
     ) -> Result<Response<RecoveryAddEntryResponse>, Status> {
         let r = req.into_inner();
-        run_blocking(&self.bookie, move |b| {
-            b.recovery_add_entry(
-                r.ledger_id,
-                r.entry_id,
-                r.lac,
-                Bytes::from(r.payload),
-                &r.master_key,
-            )
-        })
+        let nbytes = r.payload.len() as u64;
+        let ledger_id = r.ledger_id;
+        let entry_id = r.entry_id;
+        self.run_rpc_simple(
+            "RecoveryAddEntry",
+            Some(ledger_id),
+            Some(entry_id),
+            Some((nbytes, "in")),
+            move |b| {
+                b.recovery_add_entry(
+                    ledger_id,
+                    entry_id,
+                    r.lac,
+                    Bytes::from(r.payload),
+                    &r.master_key,
+                )
+            },
+        )
         .await?;
         Ok(Response::new(RecoveryAddEntryResponse {}))
     }
@@ -216,7 +326,18 @@ impl BookieRpc for BookieService {
         req: Request<ReadEntryRequest>,
     ) -> Result<Response<ReadEntryResponse>, Status> {
         let r = req.into_inner();
-        let entry = run_blocking(&self.bookie, move |b| b.read_entry(r.ledger_id, r.entry_id)).await?;
+        let ledger_id = r.ledger_id;
+        let entry_id = r.entry_id;
+        let entry = self
+            .run_rpc(
+                "ReadEntry",
+                Some(ledger_id),
+                Some(entry_id),
+                None,
+                move |b| b.read_entry(ledger_id, entry_id),
+                |e| Some((e.payload.len() as u64, "out")),
+            )
+            .await?;
         Ok(Response::new(ReadEntryResponse {
             entry: Some(to_pb_entry(entry)),
         }))
@@ -228,9 +349,21 @@ impl BookieRpc for BookieService {
     ) -> Result<Response<ReadEntriesResponse>, Status> {
         let r = req.into_inner();
         let max = r.max as usize;
-        let entries =
-            run_blocking(&self.bookie, move |b| b.read_entries(r.ledger_id, r.from_entry_id, max))
-                .await?;
+        let ledger_id = r.ledger_id;
+        let from = r.from_entry_id;
+        let entries = self
+            .run_rpc(
+                "ReadEntries",
+                Some(ledger_id),
+                Some(from),
+                None,
+                move |b| b.read_entries(ledger_id, from, max),
+                |entries| {
+                    let nbytes: u64 = entries.iter().map(|e| e.payload.len() as u64).sum();
+                    Some((nbytes, "out"))
+                },
+            )
+            .await?;
         Ok(Response::new(ReadEntriesResponse {
             entries: entries.into_iter().map(to_pb_entry).collect(),
         }))
@@ -241,7 +374,12 @@ impl BookieRpc for BookieService {
         req: Request<ListEntriesRequest>,
     ) -> Result<Response<ListEntriesResponse>, Status> {
         let r = req.into_inner();
-        let entry_ids = run_blocking(&self.bookie, move |b| b.list_entries(r.ledger_id)).await?;
+        let ledger_id = r.ledger_id;
+        let entry_ids = self
+            .run_rpc_simple("ListEntries", Some(ledger_id), None, None, move |b| {
+                b.list_entries(ledger_id)
+            })
+            .await?;
         Ok(Response::new(ListEntriesResponse { entry_ids }))
     }
 
@@ -250,7 +388,15 @@ impl BookieRpc for BookieService {
         req: Request<FenceLedgerRequest>,
     ) -> Result<Response<FenceLedgerResponse>, Status> {
         let r = req.into_inner();
-        run_blocking(&self.bookie, move |b| b.fence_ledger(r.ledger_id, &r.master_key)).await?;
+        let ledger_id = r.ledger_id;
+        self.run_rpc_simple(
+            "FenceLedger",
+            Some(ledger_id),
+            None,
+            None,
+            move |b| b.fence_ledger(ledger_id, &r.master_key),
+        )
+        .await?;
         Ok(Response::new(FenceLedgerResponse {}))
     }
 
@@ -259,9 +405,14 @@ impl BookieRpc for BookieService {
         req: Request<SetExplicitLacRequest>,
     ) -> Result<Response<SetExplicitLacResponse>, Status> {
         let r = req.into_inner();
-        run_blocking(&self.bookie, move |b| {
-            b.set_explicit_lac(r.ledger_id, r.lac, &r.master_key)
-        })
+        let ledger_id = r.ledger_id;
+        self.run_rpc_simple(
+            "SetExplicitLac",
+            Some(ledger_id),
+            None,
+            None,
+            move |b| b.set_explicit_lac(ledger_id, r.lac, &r.master_key),
+        )
         .await?;
         Ok(Response::new(SetExplicitLacResponse {}))
     }
@@ -271,7 +422,16 @@ impl BookieRpc for BookieService {
         req: Request<ReadLastConfirmedRequest>,
     ) -> Result<Response<ReadLastConfirmedResponse>, Status> {
         let r = req.into_inner();
-        let lac = run_blocking(&self.bookie, move |b| b.read_last_confirmed(r.ledger_id)).await?;
+        let ledger_id = r.ledger_id;
+        let lac = self
+            .run_rpc_simple(
+                "ReadLastConfirmed",
+                Some(ledger_id),
+                None,
+                None,
+                move |b| b.read_last_confirmed(ledger_id),
+            )
+            .await?;
         Ok(Response::new(ReadLastConfirmedResponse { lac }))
     }
 
@@ -280,7 +440,12 @@ impl BookieRpc for BookieService {
         req: Request<LastEntryIdRequest>,
     ) -> Result<Response<LastEntryIdResponse>, Status> {
         let r = req.into_inner();
-        let entry_id = run_blocking(&self.bookie, move |b| b.last_entry_id(r.ledger_id)).await?;
+        let ledger_id = r.ledger_id;
+        let entry_id = self
+            .run_rpc_simple("LastEntryId", Some(ledger_id), None, None, move |b| {
+                b.last_entry_id(ledger_id)
+            })
+            .await?;
         Ok(Response::new(LastEntryIdResponse { entry_id }))
     }
 
@@ -289,7 +454,12 @@ impl BookieRpc for BookieService {
         req: Request<IsFencedRequest>,
     ) -> Result<Response<IsFencedResponse>, Status> {
         let r = req.into_inner();
-        let fenced = run_blocking(&self.bookie, move |b| b.is_fenced(r.ledger_id)).await?;
+        let ledger_id = r.ledger_id;
+        let fenced = self
+            .run_rpc_simple("IsFenced", Some(ledger_id), None, None, move |b| {
+                b.is_fenced(ledger_id)
+            })
+            .await?;
         Ok(Response::new(IsFencedResponse { fenced }))
     }
 
@@ -298,7 +468,11 @@ impl BookieRpc for BookieService {
         req: Request<DeleteLedgerRequest>,
     ) -> Result<Response<DeleteLedgerResponse>, Status> {
         let r = req.into_inner();
-        run_blocking(&self.bookie, move |b| b.delete_ledger(r.ledger_id)).await?;
+        let ledger_id = r.ledger_id;
+        self.run_rpc_simple("DeleteLedger", Some(ledger_id), None, None, move |b| {
+            b.delete_ledger(ledger_id)
+        })
+        .await?;
         Ok(Response::new(DeleteLedgerResponse {}))
     }
 }

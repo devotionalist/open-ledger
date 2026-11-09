@@ -42,11 +42,12 @@ Fault matrix and scripts: [docs/deploy/failure-tests.md](docs/deploy/failure-tes
 | Path | Role |
 |---|---|
 | `crates/open-ledger` | `Bookie`, `LocalBookie` / `MemoryBookie`, in-process quorum client, Oxia key layout |
-| `crates/open-ledger-oxia` | `OxiaMetaStore`, registry, election, Auditor, ReplicationWorker |
-| `crates/openledgerd` | Bookie process: local dir + gRPC `:3181` |
-| `crates/openledger-autorecovery` | Colocated AutoRecovery sidecar |
+| `crates/open-ledger-oxia` | Coord backends (Oxia / OpenKV), registry, election, Auditor, Worker |
+| `crates/openledgerd` | Bookie process: gRPC `:3181` + HTTP admin/metrics `:3182` |
+| `crates/openledger-autorecovery` | Colocated AutoRecovery sidecar (`:3183` metrics) |
+| `crates/openledger-admin` | Cluster UI + coordination gauges (`:8080`) |
 | `proto/bookie/v1` | Bookie gRPC definition |
-| `deploy/k8s` | Local k3s manifests |
+| `deploy/k8s` | Local k3s manifests (+ optional `monitoring/`) |
 | `scripts/` | Cluster fault and e2e scripts |
 
 ### Language clients
@@ -68,8 +69,10 @@ Same E/Qw/Qa, fence coverage, `RecoveryReadsFence`, and `PipelineWriter` semanti
 | Durability | Journal fsync before ack; append-only `entries.bin`; checkpoint replay |
 | Quorum write | Round-robin write set; wait for Qa acks |
 | Recover | Fence coverage `(Qw−Qa)+1`, then forward repair → CAS `CLOSED` |
-| Metadata | Oxia in production; `MemoryMetaStore` for tests only |
+| Metadata | Oxia (default) or OpenKV (`COORD_BACKEND`); `MemoryMetaStore` for tests only |
 | AutoRecovery | Lost bookie → underreplicated → local `recoveryAdd` + ensemble replace |
+| Observability | Bookie `:3182` + AR `:3183` + admin `:8080` Prometheus; JSON logs (`RUST_LOG_FORMAT=json`); gRPC spans |
+| Web admin | Per-bookie `:3182/`; cluster console `:8080/` (Oxia bookies / ledgers / UR) |
 
 ## Disk layout (`LocalBookie`)
 

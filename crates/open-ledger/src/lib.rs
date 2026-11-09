@@ -26,7 +26,7 @@ pub use client::{
 };
 pub use distribution::{fragment_for, write_quorum_covered, write_set};
 pub use error::{Error, Result};
-pub use local::LocalBookie;
+pub use local::{AdminSnapshot, LedgerSummary, LocalBookie};
 pub use memory::MemoryBookie;
 pub use meta::{LedgerMeta, LedgerMetaStore, MemoryMetaStore};
 pub use store::Bookie;

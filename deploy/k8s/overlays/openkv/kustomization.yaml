@@ -1,0 +1,13 @@
+# Switch AR + admin from Oxia to OpenKV Gateway.
+# Prereq: an OpenKV Gateway reachable as openkv.open-ledger.svc:19000
+# (deploy OpenKV separately — see amydemo/openkv deploy/helm or docker-compose).
+#
+#   kubectl apply -k deploy/k8s/overlays/openkv
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: open-ledger
+resources:
+  - ../../
+patches:
+  - path: patch-bookie-openkv.yaml
+  - path: patch-admin-openkv.yaml

@@ -28,6 +28,15 @@ pub struct LedgerMeta {
     pub master_key: Vec<u8>,
     /// CAS version. The store assigns this.
     pub meta_version: u64,
+    /// Cold-tier URI after offload. Only meaningful when [`MetaState::Closed`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offload_location: Option<String>,
+    /// Unix millis when the ledger was created (orphan GC aging). Optional for old records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at_ms: Option<u64>,
+    /// Set when upper layer abandons an unindexed Create (orphan GC).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphan_marked: Option<bool>,
 }
 
 impl LedgerMeta {
@@ -59,6 +68,9 @@ impl LedgerMeta {
             }],
             master_key,
             meta_version: 0,
+            offload_location: None,
+            created_at_ms: None,
+            orphan_marked: None,
         })
     }
 }

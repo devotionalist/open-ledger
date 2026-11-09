@@ -42,11 +42,12 @@ cargo run -p openledgerd -- --data-dir /tmp/ol-data --bookie-id bookie-0 --ready
 | 路径 | 角色 |
 |---|---|
 | `crates/open-ledger` | `Bookie`、`LocalBookie` / `MemoryBookie`、进程内 quorum client、Oxia key 布局 |
-| `crates/open-ledger-oxia` | `OxiaMetaStore`、registry、election、Auditor、ReplicationWorker |
-| `crates/openledgerd` | Bookie 进程：本地目录 + gRPC `:3181` |
-| `crates/openledger-autorecovery` | 同 Pod AutoRecovery sidecar |
+| `crates/open-ledger-oxia` | 协调后端（Oxia / OpenKV）、registry、election、Auditor、Worker |
+| `crates/openledgerd` | Bookie 进程：gRPC `:3181` + HTTP 管理/指标 `:3182` |
+| `crates/openledger-autorecovery` | 同 Pod AutoRecovery sidecar（`:3183` 指标） |
+| `crates/openledger-admin` | 集群 UI + Oxia 协调面 gauges（`:8080`） |
 | `proto/bookie/v1` | Bookie gRPC 定义 |
-| `deploy/k8s` | 本地 k3s 清单 |
+| `deploy/k8s` | 本地 k3s 清单（含可选 `monitoring/`） |
 | `scripts/` | 集群故障与 e2e 脚本 |
 
 ### Language clients
@@ -68,8 +69,10 @@ cargo run -p openledgerd -- --data-dir /tmp/ol-data --bookie-id bookie-0 --ready
 | 耐久 | ack 前 journal fsync；`entries.bin` 追加；checkpoint 回放 |
 | Quorum 写 | round-robin write set，等 Qa ack |
 | Recover | fence coverage `(Qw−Qa)+1`，再向前读修 → CAS `CLOSED` |
-| Metadata | 生产用 Oxia；`MemoryMetaStore` 仅测试 |
+| Metadata | 默认 Oxia，可选 OpenKV（`COORD_BACKEND`）；`MemoryMetaStore` 仅测试 |
 | AutoRecovery | 丢 bookie → underreplicated → 本机 `recoveryAdd` + 换 ensemble |
+| 可观测性 | Bookie `:3182` + AR `:3183` + admin `:8080` Prometheus；JSON 日志（`RUST_LOG_FORMAT=json`）；gRPC span |
+| Web 管理 | 单 bookie `:3182/`；集群控制台 `:8080/`（Oxia bookies / ledgers / UR） |
 
 ## Disk layout（LocalBookie）
 

@@ -53,12 +53,23 @@ LedgerMeta {
   fragments[]: { firstEntryId, ensemble[] }
   masterKey
   metaVersion          // CAS
+  offloadLocation?     // optional URI; only meaningful when CLOSED (M3 upload)
+  createdAtMs?         // for orphan GC aging
+  orphanMarked?        // upper layer abandoned unindexed Create
 }
 ```
 
 The first fragment's `firstEntryId` is 0. Changing the ensemble only appends a fragment; `firstEntryId` must be greater than the previous segment's, and historical fragments are not modified.
 
-`MemoryMetaStore` is an in-process CAS for tests. Production uses Oxia (`OxiaMetaStore`): `LedgerMeta.meta_version` ↔ Oxia's `version_id`. Key layout is in `open_ledger::keys` (`/open-ledger/ledgers/...`, bookie registry, underreplicated, election).
+**ledgerId allocation (authoritative in this repo):** Client obtains a unique id from OL Metadata (sequence key / snowflake under `/open-ledger/…`) before writing `LedgerMeta` OPEN. Upstream brokers (e.g. open-message) **must not** mint conflicting ids. Prefer setting `createdAtMs` on Create; `MarkOrphan` sets `orphanMarked`.
+`MemoryMetaStore` is an in-process CAS for tests. Production uses a pluggable coordination store behind `CoordStore` / `OxiaMetaStore`:
+
+| Backend | Flag | Version | Ephemeral | Listing |
+|---|---|---|---|---|
+| **Oxia** (default) | `COORD_BACKEND=oxia` | `version_id` | session ephemeral | native `range_scan` |
+| **OpenKV** | `COORD_BACKEND=openkv` | Gateway MVCC `revision` | `Put` + `ttl_ms` (refreshed by heartbeat) | DS Set indexes (`/open-ledger/idx/...`) — Gateway has no range RPC |
+
+`LedgerMeta.meta_version` ↔ store version. Key layout is in `open_ledger::keys` (`/open-ledger/ledgers/...`, bookie registry, underreplicated, election). OpenKV create-only = `PutCAS(expected_revision=0)`.
 
 ### 3.2 Bookie-local
 
@@ -251,6 +262,83 @@ Isomorphic to BookKeeper; all coordination state lives in Oxia:
 | OPEN tail segment | Wait for grace first, then fence, then replicate; do not change entryId / payload |
 | Backpressure | `max_tasks_per_tick` caps tasks per round; `entry_interval` throttles `recoveryAdd`; `max_copy_bytes_per_tick` caps bytes copied per round (when budget is exhausted, leave the task for the next round; prevents #3408-class storms) |
 
-The Worker **only repairs the local bookie** (same Pod). k8s: Oxia STS×1 + bookie STS×8 (each Pod runs `openledgerd` + `openledger-autorecovery`).
+The Worker **only repairs the local bookie** (same Pod). k8s default: Oxia STS×1 + bookie STS×8 (each Pod runs `openledgerd` + `openledger-autorecovery`). Optional OpenKV profile: `kubectl apply -k deploy/k8s/overlays/openkv` (`COORD_BACKEND=openkv`, Gateway `:19000`).
 
 M0 allows callers to use `E = Qw = Qa = 1`; the API and metadata still carry E/Qw/Qa.
+
+## 10. Orphan ledger GC
+
+Upper layers (e.g. open-message `LedgerIndex`) may fail after `Create` succeeds, leaving a ledger in OL Metadata that is **never referenced**. Orphan GC lives **in open-ledger** (not the broker):
+
+1. **Primary path:** Client `MarkOrphan(ledgerId)` → `orphanMarked=true` → after grace, Fence/Close/Delete.  
+2. **Reconciliation path:** age via `createdAtMs`; delete only against a **complete** upper-layer reference snapshot (no sampling) or after MarkOrphan.  
+3. **Default:** do **not** reclaim orphans back into an Index; upper layer Creates a new ledger.  
+4. Never delete a ledger still listed in a same-generation full Index export.
+
+Detail: `open-message/docs/design/22-orphan-gc.md`.
+
+## 11. Observability and web admin
+
+### 11.1 Bookie (`openledgerd` `:3182`)
+
+Beside gRPC `:3181`:
+
+| Path | Purpose |
+|---|---|
+| `GET /` | Per-bookie status page (id, journal size, ledger table) |
+| `GET /api/v1/status` | Same data as JSON |
+| `GET /metrics` | Prometheus text exposition |
+| `GET /ready` | Readiness probe (cookie present / bookie open) |
+| `GET /live` | Liveness probe |
+
+| Metric | Type | Labels |
+|---|---|---|
+| `openledger_bookie_rpc_total` | counter | `method`, `result` |
+| `openledger_bookie_rpc_errors_total` | counter | `method`, `error_kind` |
+| `openledger_bookie_rpc_duration_seconds` | histogram | `method` |
+| `openledger_bookie_rpc_bytes_total` | counter | `method`, `direction` (`in`/`out`) |
+| `openledger_bookie_journal_bytes` | gauge | — |
+| `openledger_bookie_ledgers` | gauge | — |
+| `openledger_bookie_fenced_ledgers` | gauge | — |
+
+gRPC handlers emit `bookie.rpc` spans (`rpc`, `ledger_id`, `entry_id`, `otel.kind=server`). Failures log `method` / `ledger_id` / `entry_id` / `error_kind`.
+
+### 11.2 AutoRecovery (`openledger-autorecovery` `:3183`)
+
+| Path | Purpose |
+|---|---|
+| `GET /` | Sidecar status (bookie id, auditor leadership) |
+| `GET /metrics` | Prometheus text |
+| `GET /ready` `/live` | Probes |
+
+Series include auditor leadership, registry heartbeats, under-replicated enqueue / lock / copy / CAS / budget counters and task latency histograms (`openledger_ar_*`).
+
+### 11.3 Cluster admin (`openledger-admin` `:8080`)
+
+Independent process (not inside the bookie). Periodically lists coordination keys (Oxia range-scan or OpenKV index Sets) and exposes:
+
+| Path | Purpose |
+|---|---|
+| `GET /` | Cluster UI: alive bookies, ledger meta count, under-replicated queue |
+| `GET /api/v1/cluster` | Same as JSON |
+| `GET /metrics` | Coordination-plane gauges |
+| `GET /ready` `/live` | Probes |
+
+| Metric | Type |
+|---|---|
+| `openledger_cluster_alive_bookies` | gauge |
+| `openledger_cluster_ledger_metas` | gauge |
+| `openledger_cluster_underreplicated_tasks` | gauge |
+| `openledger_cluster_underreplicated_waiting` | gauge (`not_before` still in the future) |
+
+### 11.4 Logs and tracing
+
+- `RUST_LOG` filters; set `RUST_LOG_FORMAT=json` in k8s for structured logs.
+- Shared fields: `bookie_id`, `ledger_id`, `entry_id`, `method` / `rpc`, `error_kind`; AR adds task / missing bookie / copy counts via observer hooks.
+- Spans are `tracing`-native today (ready for an OTLP layer). Sampling guidance: write-path ~1%, errors always; key child spans still to wire: `journal_fsync`, `oxia_cas`, AR `recoveryAdd`.
+
+### 11.5 Deploy scrape / alert
+
+- Annotations on bookie / admin Services for annotation-based scrapers.
+- Optional Prometheus Operator pack: `deploy/k8s/monitoring` (`ServiceMonitor`, `PrometheusRule`, Grafana dashboard ConfigMap).
+- Initial alerts: bookie scrape down, RPC error rate / p99, alive bookies low, under-replicated stuck with no AR completions.
