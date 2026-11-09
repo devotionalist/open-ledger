@@ -1,0 +1,69 @@
+# Single-node Oxia for local k3s (metadata + AutoRecovery coordination).
+apiVersion: v1
+kind: Service
+metadata:
+  name: oxia
+  namespace: open-ledger
+  labels:
+    app: oxia
+spec:
+  clusterIP: None
+  selector:
+    app: oxia
+  ports:
+    - name: oxia
+      port: 6648
+      targetPort: oxia
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: oxia
+  namespace: open-ledger
+  labels:
+    app: oxia
+spec:
+  serviceName: oxia
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oxia
+  template:
+    metadata:
+      labels:
+        app: oxia
+    spec:
+      containers:
+        - name: oxia
+          image: oxia/oxia:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - oxia
+            - standalone
+            - --data-dir=/data
+          ports:
+            - name: oxia
+              containerPort: 6648
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: oxia
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 1Gi

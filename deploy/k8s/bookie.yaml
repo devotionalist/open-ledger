@@ -1,0 +1,114 @@
+# Bookie StatefulSet for a local k3s/colima cluster.
+# Each pod runs openledgerd + openledger-autorecovery sidecar.
+# Disk comes from the local-path provisioner (hostPath underneath).
+apiVersion: v1
+kind: Service
+metadata:
+  name: bookie
+  namespace: open-ledger
+  labels:
+    app: bookie
+spec:
+  clusterIP: None
+  selector:
+    app: bookie
+  ports:
+    - name: bookie
+      port: 3181
+      targetPort: bookie
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bookie
+  namespace: open-ledger
+  labels:
+    app: bookie
+spec:
+  serviceName: bookie
+  replicas: 8
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: bookie
+  template:
+    metadata:
+      labels:
+        app: bookie
+    spec:
+      securityContext:
+        fsGroup: 65532
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+      containers:
+        - name: openledgerd
+          image: docker.io/library/openledgerd:local
+          imagePullPolicy: Never
+          args:
+            - --data-dir=/data
+            - --bookie-id=$(POD_NAME)
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: RUST_LOG
+              value: info
+          ports:
+            - name: bookie
+              containerPort: 3181
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: bookie
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: bookie
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+        - name: autorecovery
+          image: docker.io/library/openledger-autorecovery:local
+          imagePullPolicy: Never
+          args:
+            - --oxia=oxia.open-ledger.svc.cluster.local:6648
+            - --bookie-id=$(POD_NAME)
+            - --bookie-address=$(POD_NAME).bookie.open-ledger.svc.cluster.local:3181
+            - --local-bookie-addr=127.0.0.1:3181
+            - --lost-bookie-delay-secs=15
+            - --open-ledger-grace-secs=5
+            - --worker-max-tasks-per-tick=4
+            - --worker-entry-interval-ms=0
+            - --worker-max-copy-bytes-per-tick=67108864
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: RUST_LOG
+              value: info
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 1Gi

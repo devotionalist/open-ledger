@@ -1,0 +1,16 @@
+[package]
+name = "openledger-autorecovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "BookKeeper-style AutoRecovery (Auditor + ReplicationWorker) for open-ledger"
+
+[[bin]]
+name = "openledger-autorecovery"
+path = "src/main.rs"
+
+[dependencies]
+open-ledger-oxia = { path = "../open-ledger-oxia", version = "0.1.0" }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

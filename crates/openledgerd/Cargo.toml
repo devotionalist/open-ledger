@@ -1,0 +1,24 @@
+[package]
+name = "openledgerd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "open-ledger bookie daemon"
+
+[[bin]]
+name = "openledgerd"
+path = "src/main.rs"
+
+[dependencies]
+open-ledger = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }

@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/open-ledger",
+    "crates/open-ledger-oxia",
+    "crates/openledgerd",
+    "crates/openledger-autorecovery",
+]
+default-members = ["crates/open-ledger", "crates/openledgerd"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/devotionalist/open-ledger"
+authors = ["open-ledger contributors"]
+
+[workspace.dependencies]
+open-ledger = { path = "crates/open-ledger", version = "0.1.0" }
+thiserror = "2"
+bytes = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "net", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tonic = "0.12"
+tonic-build = "0.12"
+prost = "0.13"
+prost-types = "0.13"

@@ -1,0 +1,28 @@
+[package]
+name = "open-ledger-oxia"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Oxia-backed LedgerMetaStore, bookie registry, and AutoRecovery"
+readme = "../../README.md"
+
+[dependencies]
+open-ledger = { workspace = true }
+bytes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+oxia-client = "0.2"
+compio = { version = "0.19", features = ["macros", "time"] }
+
+[build-dependencies]
+tonic-build = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
