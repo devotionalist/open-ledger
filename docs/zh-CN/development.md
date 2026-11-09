@@ -3,7 +3,7 @@
 [English](../development.md) | [中文](./development.md)
 
 
-设计语义以 [design.md](./design.md) 为准。文档默认英文在 `docs/`，中文镜像在 `docs/zh-CN/`。设计语义以 [design.md](./design.md) 为准。
+设计语义以 [design.md](./design.md) 为准。文档默认英文在 `docs/`，中文镜像在 `docs/zh-CN/`。
 
 ## 1. 边界
 
