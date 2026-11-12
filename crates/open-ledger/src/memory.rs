@@ -1,209 +1,186 @@
-//! In-memory bookie. Same add / fence / recovery-add rules as [`crate::LocalBookie`], without a journal.
+//! In-memory Bookie for unit tests and M0 smoke (no disk).
 
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use bytes::Bytes;
 
-use crate::error::Result;
-use crate::state::{BookieState, Rec};
-use crate::store::Bookie;
-use crate::types::{Entry, EntryId, LedgerId};
+use crate::error::{Error, Result};
+use crate::store::LedgerStore;
+use crate::types::{BookieId, Ensemble, Entry, EntryId, LedgerId, LedgerState, Quorum};
 
-/// Process-local bookie. State does not survive a restart.
-#[derive(Debug, Default)]
+struct LedgerMem {
+    state: LedgerState,
+    next_entry_id: EntryId,
+    last_entry_id: i64,
+    entries: BTreeMap<EntryId, Entry>,
+    #[allow(dead_code)]
+    quorum: Quorum,
+    #[allow(dead_code)]
+    ensemble: Ensemble,
+}
+
+/// Process-local bookie. Not durable across restart — tests / embed only.
+#[derive(Default)]
 pub struct MemoryBookie {
-    inner: Mutex<BookieState>,
+    inner: Mutex<BTreeMap<LedgerId, LedgerMem>>,
 }
 
 impl MemoryBookie {
-    /// Empty bookie.
+    /// Create an empty in-memory bookie.
     pub fn new() -> Self {
         Self::default()
     }
-
-    fn submit(&self, rec: Rec) -> Result<()> {
-        let mut g = self.inner.lock().expect("memory bookie");
-        if g.prepare(&rec)? {
-            g.apply(rec)?;
-        }
-        Ok(())
-    }
 }
 
-impl Bookie for MemoryBookie {
-    fn create_ledger(&self, ledger_id: LedgerId, master_key: &[u8]) -> Result<()> {
-        self.submit(Rec::Create {
+impl LedgerStore for MemoryBookie {
+    fn create(
+        &self,
+        ledger_id: LedgerId,
+        quorum: Quorum,
+        ensemble: Ensemble,
+        this_bookie: &BookieId,
+    ) -> Result<()> {
+        quorum
+            .validate()
+            .map_err(|e| Error::InvalidArgument(e.into()))?;
+        if !ensemble.iter().any(|b| b == this_bookie) {
+            return Err(Error::InvalidArgument(
+                "this_bookie not in ensemble".into(),
+            ));
+        }
+        if ensemble.len() != quorum.e as usize {
+            return Err(Error::InvalidArgument(
+                "ensemble len must equal E".into(),
+            ));
+        }
+
+        let mut g = self.inner.lock().expect("memory bookie lock");
+        if g.contains_key(&ledger_id) {
+            return Err(Error::AlreadyExists(ledger_id));
+        }
+        g.insert(
             ledger_id,
-            master_key: master_key.to_vec(),
-        })
+            LedgerMem {
+                state: LedgerState::Open,
+                next_entry_id: 0,
+                last_entry_id: -1,
+                entries: BTreeMap::new(),
+                quorum,
+                ensemble,
+            },
+        );
+        Ok(())
     }
 
-    fn add_entry(
+    fn append(
         &self,
         ledger_id: LedgerId,
         entry_id: EntryId,
         lac: i64,
         payload: Bytes,
-        master_key: &[u8],
     ) -> Result<()> {
-        self.submit(Rec::Add {
-            ledger_id,
+        let mut g = self.inner.lock().expect("memory bookie lock");
+        let led = g.get_mut(&ledger_id).ok_or(Error::NotFound(ledger_id))?;
+        match led.state {
+            LedgerState::Fenced => return Err(Error::Fenced(ledger_id)),
+            LedgerState::Closed => return Err(Error::Sealed(ledger_id)),
+            LedgerState::Open => {}
+        }
+        if entry_id != led.next_entry_id {
+            return Err(Error::BadEntryId {
+                ledger_id,
+                expected: led.next_entry_id,
+                got: entry_id,
+            });
+        }
+        led.entries.insert(
             entry_id,
-            lac,
-            payload,
-            recovery: false,
-            master_key: master_key.to_vec(),
-        })
+            Entry::new(ledger_id, entry_id, lac, payload),
+        );
+        led.next_entry_id = entry_id + 1;
+        led.last_entry_id = entry_id as i64;
+        Ok(())
     }
 
-    fn recovery_add_entry(
-        &self,
-        ledger_id: LedgerId,
-        entry_id: EntryId,
-        lac: i64,
-        payload: Bytes,
-        master_key: &[u8],
-    ) -> Result<()> {
-        self.submit(Rec::Add {
-            ledger_id,
-            entry_id,
-            lac,
-            payload,
-            recovery: true,
-            master_key: master_key.to_vec(),
-        })
+    fn fence(&self, ledger_id: LedgerId) -> Result<()> {
+        let mut g = self.inner.lock().expect("memory bookie lock");
+        let led = g.get_mut(&ledger_id).ok_or(Error::NotFound(ledger_id))?;
+        if led.state == LedgerState::Closed {
+            return Ok(());
+        }
+        led.state = LedgerState::Fenced;
+        Ok(())
     }
 
-    fn read_entry(&self, ledger_id: LedgerId, entry_id: EntryId) -> Result<Entry> {
-        self.inner
-            .lock()
-            .expect("memory bookie")
-            .read_entry(ledger_id, entry_id)
+    fn recover(&self, ledger_id: LedgerId) -> Result<i64> {
+        let mut g = self.inner.lock().expect("memory bookie lock");
+        let led = g.get_mut(&ledger_id).ok_or(Error::NotFound(ledger_id))?;
+        if led.state == LedgerState::Closed {
+            return Ok(led.last_entry_id);
+        }
+        led.state = LedgerState::Closed;
+        Ok(led.last_entry_id)
     }
 
-    fn read_entries(
-        &self,
-        ledger_id: LedgerId,
-        from_entry_id: EntryId,
-        max: usize,
-    ) -> Result<Vec<Entry>> {
-        self.inner
-            .lock()
-            .expect("memory bookie")
-            .read_entries(ledger_id, from_entry_id, max)
+    fn close(&self, ledger_id: LedgerId, last_entry_id: i64) -> Result<()> {
+        let mut g = self.inner.lock().expect("memory bookie lock");
+        let led = g.get_mut(&ledger_id).ok_or(Error::NotFound(ledger_id))?;
+        if last_entry_id < -1 || last_entry_id > led.last_entry_id {
+            return Err(Error::InvalidArgument(
+                "last_entry_id out of range".into(),
+            ));
+        }
+        led.last_entry_id = last_entry_id;
+        led.state = LedgerState::Closed;
+        Ok(())
     }
 
-    fn list_entries(&self, ledger_id: LedgerId) -> Result<Vec<EntryId>> {
-        self.inner
-            .lock()
-            .expect("memory bookie")
-            .list_entries(ledger_id)
+    fn read(&self, ledger_id: LedgerId, from_entry_id: EntryId, max: usize) -> Result<Vec<Entry>> {
+        let g = self.inner.lock().expect("memory bookie lock");
+        let led = g.get(&ledger_id).ok_or(Error::NotFound(ledger_id))?;
+        let out: Vec<_> = led
+            .entries
+            .range(from_entry_id..)
+            .take(max)
+            .map(|(_, e)| e.clone())
+            .collect();
+        Ok(out)
     }
 
-    fn fence_ledger(&self, ledger_id: LedgerId, master_key: &[u8]) -> Result<()> {
-        self.submit(Rec::Fence {
-            ledger_id,
-            master_key: master_key.to_vec(),
-        })
-    }
-
-    fn set_explicit_lac(&self, ledger_id: LedgerId, lac: i64, master_key: &[u8]) -> Result<()> {
-        self.submit(Rec::ExplicitLac {
-            ledger_id,
-            lac,
-            master_key: master_key.to_vec(),
-        })
-    }
-
-    fn read_last_confirmed(&self, ledger_id: LedgerId) -> Result<i64> {
-        self.inner
-            .lock()
-            .expect("memory bookie")
-            .read_last_confirmed(ledger_id)
-    }
-
-    fn last_entry_id(&self, ledger_id: LedgerId) -> Result<i64> {
-        self.inner
-            .lock()
-            .expect("memory bookie")
-            .last_entry_id(ledger_id)
-    }
-
-    fn is_fenced(&self, ledger_id: LedgerId) -> Result<bool> {
-        self.inner
-            .lock()
-            .expect("memory bookie")
-            .is_fenced(ledger_id)
-    }
-
-    fn delete_ledger(&self, ledger_id: LedgerId) -> Result<()> {
-        self.submit(Rec::Delete { ledger_id })
+    fn delete(&self, ledger_id: LedgerId) -> Result<()> {
+        let mut g = self.inner.lock().expect("memory bookie lock");
+        if g.remove(&ledger_id).is_none() {
+            return Err(Error::NotFound(ledger_id));
+        }
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Error;
-
-    const KEY: &[u8] = b"k";
 
     #[test]
-    fn gaps_fence_and_explicit_lac() {
+    fn append_read_fence() {
         let b = MemoryBookie::new();
-        b.create_ledger(1, KEY).unwrap();
-        b.add_entry(1, 0, -1, Bytes::from_static(b"a"), KEY)
-            .unwrap();
-        b.add_entry(1, 2, 0, Bytes::from_static(b"c"), KEY).unwrap();
-        assert!(matches!(
-            b.read_entry(1, 1),
-            Err(Error::NoSuchEntry { entry_id: 1, .. })
-        ));
-        assert_eq!(b.list_entries(1).unwrap(), vec![0, 2]);
-        assert_eq!(b.read_last_confirmed(1).unwrap(), 0);
-        assert_eq!(b.last_entry_id(1).unwrap(), 2);
+        let id = "bookie-0".to_string();
+        b.create(1, Quorum::ONE, vec![id.clone()], &id).unwrap();
+        b.append(1, 0, -1, Bytes::from_static(b"a")).unwrap();
+        b.append(1, 1, 0, Bytes::from_static(b"b")).unwrap();
+        let got = b.read(1, 0, 10).unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[1].payload.as_ref(), b"b");
 
-        b.set_explicit_lac(1, 2, KEY).unwrap();
-        assert_eq!(b.read_last_confirmed(1).unwrap(), 2);
-
-        b.add_entry(1, 0, -1, Bytes::from_static(b"a"), KEY)
-            .unwrap();
+        b.fence(1).unwrap();
         assert!(matches!(
-            b.add_entry(1, 0, -1, Bytes::from_static(b"nope"), KEY),
-            Err(Error::Conflict { entry_id: 0, .. })
-        ));
-
-        b.fence_ledger(1, KEY).unwrap();
-        assert!(matches!(
-            b.add_entry(1, 3, 2, Bytes::from_static(b"x"), KEY),
+            b.append(1, 2, 1, Bytes::from_static(b"c")),
             Err(Error::Fenced(1))
         ));
+        assert_eq!(b.recover(1).unwrap(), 1);
         assert!(matches!(
-            b.set_explicit_lac(1, 3, KEY),
-            Err(Error::Fenced(1))
-        ));
-        b.recovery_add_entry(1, 4, 2, Bytes::from_static(b"r"), KEY)
-            .unwrap();
-        assert_eq!(b.read_entry(1, 4).unwrap().payload.as_ref(), b"r");
-        b.recovery_add_entry(1, 4, 2, Bytes::from_static(b"r"), KEY)
-            .unwrap();
-
-        assert!(matches!(
-            b.fence_ledger(1, b"other"),
-            Err(Error::Unauthorized(1))
-        ));
-        assert!(b.is_fenced(1).unwrap());
-    }
-
-    #[test]
-    fn fence_unknown_ledger_blocks_later_add() {
-        let b = MemoryBookie::new();
-        b.fence_ledger(9, KEY).unwrap();
-        b.create_ledger(9, KEY).unwrap();
-        assert!(b.is_fenced(9).unwrap());
-        assert!(matches!(
-            b.add_entry(9, 0, -1, Bytes::from_static(b"a"), KEY),
-            Err(Error::Fenced(9))
+            b.append(1, 2, 1, Bytes::from_static(b"c")),
+            Err(Error::Sealed(1))
         ));
     }
 }

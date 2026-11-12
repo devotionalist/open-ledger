@@ -64,14 +64,7 @@ LedgerMeta {
 
 **ledgerId 发号（本仓权威）**：Client 先从 OL Metadata（`/open-ledger/…` 下序列键 / snowflake）取唯一 id，再写 `LedgerMeta` OPEN。上游 Broker（如 open-message）**不得**另发冲突号。Create 宜写 `createdAtMs`；`MarkOrphan` 置 `orphanMarked`。
 
-`MemoryMetaStore` 是测试用的进程内 CAS。生产走可插拔协调存储（`CoordStore` / `OxiaMetaStore`）：
-
-| 后端 | 开关 | 版本 | Ephemeral | 列举 |
-|---|---|---|---|---|
-| **Oxia**（默认） | `COORD_BACKEND=oxia` | `version_id` | session ephemeral | 原生 `range_scan` |
-| **OpenKV** | `COORD_BACKEND=openkv` | Gateway MVCC `revision` | `Put` + `ttl_ms`（心跳刷新） | DS Set 索引（`/open-ledger/idx/...`；Gateway 无 range RPC） |
-
-`LedgerMeta.meta_version` ↔ 存储版本。键布局见 `open_ledger::keys`。OpenKV create-only = `PutCAS(expected_revision=0)`。
+`MemoryMetaStore` 是测试用的进程内 CAS。生产环境用 Oxia（`OxiaMetaStore`）：`LedgerMeta.meta_version` ↔ Oxia `version_id`。键布局见 `open_ledger::keys`（`/open-ledger/ledgers/...`、bookie registry、underreplicated、election）。
 
 ### 3.2 Bookie 本地
 
@@ -264,57 +257,6 @@ Fence coverage：每个 write set 窗口里至少 `(Qw - Qa) + 1` 个 bookie 已
 | OPEN 尾段 | 先等 grace，再 fence 再复制；不改 entryId / payload |
 | 背压 | `max_tasks_per_tick` 限制每轮任务数；`entry_interval` 节流 `recoveryAdd`；`max_copy_bytes_per_tick` 限制每轮复制字节（预算耗尽则留下 task 下轮继续，防 #3408 类风暴） |
 
-Worker **只补本机 bookie**（同 Pod）。k8s 默认：Oxia STS×1 + bookie STS×8（每 Pod `openledgerd` + `openledger-autorecovery`）。可选 OpenKV：`kubectl apply -k deploy/k8s/overlays/openkv`（`COORD_BACKEND=openkv`，Gateway `:19000`）。
+Worker **只补本机 bookie**（同 Pod）。k8s：Oxia STS×1 + bookie STS×8（每 Pod `openledgerd` + `openledger-autorecovery`）。
 
 M0 允许调用方使用 `E = Qw = Qa = 1`，API 和 metadata 仍然携带 E/Qw/Qa。
-
-## 11. 可观测性与 Web 管理
-
-### 11.1 Bookie（`openledgerd` `:3182`）
-
-在 gRPC `:3181` 之外：
-
-| 路径 | 用途 |
-|---|---|
-| `GET /` | 单 bookie 状态页（id、journal 大小、ledger 表） |
-| `GET /api/v1/status` | 同上，JSON |
-| `GET /metrics` | Prometheus 文本 |
-| `GET /ready` / `GET /live` | 探针 |
-
-| 指标 | 类型 | Labels |
-|---|---|---|
-| `openledger_bookie_rpc_total` | counter | `method`, `result` |
-| `openledger_bookie_rpc_errors_total` | counter | `method`, `error_kind` |
-| `openledger_bookie_rpc_duration_seconds` | histogram | `method` |
-| `openledger_bookie_rpc_bytes_total` | counter | `method`, `direction`（`in`/`out`） |
-| `openledger_bookie_journal_bytes` | gauge | — |
-| `openledger_bookie_ledgers` | gauge | — |
-| `openledger_bookie_fenced_ledgers` | gauge | — |
-
-gRPC 打 `bookie.rpc` span（`rpc` / `ledger_id` / `entry_id`）；失败日志带 `error_kind`。
-
-### 11.2 AutoRecovery（`openledger-autorecovery` `:3183`）
-
-| 路径 | 用途 |
-|---|---|
-| `GET /` | sidecar 状态 |
-| `GET /metrics` | Prometheus |
-| `GET /ready` `/live` | 探针 |
-
-系列前缀 `openledger_ar_*`（Auditor 领导、心跳、队列、复制、CAS、budget、耗时）。
-
-### 11.3 集群管理（`openledger-admin` `:8080`）
-
-独立进程，定期扫 Oxia：`/` 集群页、`/api/v1/cluster`、协调面 gauges（alive bookies / ledger metas / underreplicated / waiting）。
-
-### 11.4 日志与 tracing
-
-- `RUST_LOG`；k8s 默认 `RUST_LOG_FORMAT=json`。
-- 字段：`bookie_id`、`ledger_id`、`entry_id`、`method`/`rpc`、`error_kind`。
-- span 目前是 `tracing` 原生（可再挂 OTLP）；采样建议写路径约 1%、错误全采。
-
-### 11.5 部署 scrape / 告警
-
-- Service annotation 便于注解式 scrape。
-- 可选 Prometheus Operator：`deploy/k8s/monitoring`（`ServiceMonitor`、`PrometheusRule`、Grafana dashboard ConfigMap）。
-- 初版告警：bookie scrape 失败、RPC 错误率/p99、alive bookies 过低、UR 队列积压且 AR 无进展。

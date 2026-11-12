@@ -6,3 +6,4 @@ resources:
   - oxia.yaml
   - bookie.yaml
   - admin.yaml
+  - openkv-gateway-svc.yaml

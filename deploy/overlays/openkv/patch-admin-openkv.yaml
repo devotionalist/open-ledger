@@ -10,14 +10,14 @@ spec:
         - name: admin
           args:
             - --coord-backend=openkv
-            - --openkv=openkv.open-ledger.svc.cluster.local:19000
+            - --openkv=gateway.openkv.svc.cluster.local:19000
             - --listen=0.0.0.0:8080
             - --refresh-secs=5
           env:
             - name: COORD_BACKEND
               value: openkv
             - name: OPENKV_ADDR
-              value: openkv.open-ledger.svc.cluster.local:19000
+              value: gateway.openkv.svc.cluster.local:19000
             - name: RUST_LOG
               value: info
             - name: RUST_LOG_FORMAT

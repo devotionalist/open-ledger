@@ -12,7 +12,7 @@ spec:
   # Replace with ExternalName / Endpoints to a real Gateway, or omit this file
   # and create `openkv` yourself.
   type: ExternalName
-  externalName: openkv-gateway.default.svc.cluster.local
+  externalName: gateway.openkv.svc.cluster.local
   ports:
     - name: grpc
       port: 19000

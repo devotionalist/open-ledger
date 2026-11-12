@@ -26,10 +26,9 @@ AutoRecovery sidecar      Auditor（选主）+ ReplicationWorker（补到本机 
 | 路径 | 角色 |
 |---|---|
 | `crates/open-ledger` | `Bookie`、`LocalBookie`、`MemoryBookie`，同进程 quorum client，Oxia key 布局 |
-| `crates/open-ledger-oxia` | 协调后端（**Oxia** / **OpenKV**）、registry、election、Auditor、ReplicationWorker |
-| `crates/openledgerd` | Bookie 进程：gRPC `:3181` + HTTP 管理/指标 `:3182` |
-| `crates/openledger-autorecovery` | 与 bookie 同 Pod 的 AutoRecovery sidecar（`:3183` 指标） |
-| `crates/openledger-admin` | 集群 UI + Oxia 协调面 gauges（`:8080`） |
+| `crates/open-ledger-oxia` | `OxiaMetaStore`、registry、election、Auditor、ReplicationWorker（[oxia-client](https://github.com/oxia-db/oxia-client-rust)） |
+| `crates/openledgerd` | Bookie 进程：本地目录 + gRPC `:3181` |
+| `crates/openledger-autorecovery` | 与 bookie 同 Pod 的 AutoRecovery sidecar |
 | 外部客户端 | [open-ledger-client-go](https://github.com/devotionalist/open-ledger-client-go)、[open-ledger-client-rust](https://github.com/devotionalist/open-ledger-client-rust)、[open-ledger-client-java](https://github.com/devotionalist/open-ledger-client-java)、[open-ledger-client-ts](https://github.com/devotionalist/open-ledger-client-ts)（同 quorum / recover / PipelineWriter 语义） |
 
 ## 读哪一节
@@ -48,7 +47,6 @@ AutoRecovery sidecar      Auditor（选主）+ ReplicationWorker（补到本机 
 | AutoRecovery / Oxia 键 | [design.md §9](./design.md#9-autorecovery-m3) |
 | 本地 k3s 部署 | [deploy/local-k8s.md](./deploy/local-k8s.md) |
 | 故障测试矩阵与脚本 | [deploy/failure-tests.md](./deploy/failure-tests.md) |
-| 可观测性与 Web 管理 | [design.md §11](./design.md#11-可观测性与-web-管理) |
 
 ## 不变量
 

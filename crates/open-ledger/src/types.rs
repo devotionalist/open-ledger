@@ -1,4 +1,4 @@
-//! Core ledger types.
+//! Core ledger types (aligned with open-message LedgerStore semantics).
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -6,28 +6,28 @@ use serde::{Deserialize, Serialize};
 /// Globally unique ledger identifier.
 pub type LedgerId = u64;
 
-/// Entry id within a ledger. A single bookie may store a non-contiguous subset (striping).
+/// Monotonic entry id within a ledger (0-based).
 pub type EntryId = u64;
 
-/// Bookie identity.
+/// Bookie / storage-node identity.
 pub type BookieId = String;
 
 /// Ensemble size / write quorum / ack quorum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Quorum {
-    /// Ensemble size (bookies in the fragment).
+    /// Ensemble size (number of bookies holding the fragment).
     pub e: u32,
-    /// Write quorum (bookies that receive each entry).
+    /// Write quorum (parallel write targets).
     pub qw: u32,
-    /// Ack quorum (journal acks required before the entry is confirmed).
+    /// Ack quorum (durable confirms required before success).
     pub qa: u32,
 }
 
 impl Quorum {
-    /// Single-replica quorum.
+    /// Single-replica quorum used by M0/M1.
     pub const ONE: Self = Self { e: 1, qw: 1, qa: 1 };
 
-    /// Validate `E >= Qw >= Qa >= 1`.
+    /// Validate E ≥ Qw ≥ Qa ≥ 1.
     pub fn validate(self) -> Result<(), &'static str> {
         if self.e == 0 || self.qw == 0 || self.qa == 0 {
             return Err("E/Qw/Qa must be >= 1");
@@ -39,53 +39,48 @@ impl Quorum {
     }
 }
 
-/// Ensemble membership for one fragment (length = E).
+/// Ensemble membership for a fragment (length = E).
 pub type Ensemble = Vec<BookieId>;
 
-/// One fragment of a ledger. Historical fragments are never rewritten.
+/// Alias kept for API clarity.
+pub type WriteQuorum = Quorum;
+
+/// One fragment of a ledger (ensemble may change over time).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fragment {
     /// First entry id covered by this fragment.
     pub first_entry_id: EntryId,
-    /// Bookie ids; length must equal [`Quorum::e`].
+    /// Bookie ids; length must equal Quorum.e.
     pub ensemble: Ensemble,
 }
 
-/// Authoritative ledger state. Lives in Metadata, not on the bookie.
-///
-/// Metadata service stores this. A bookie only knows entries,
-/// the master key, the fenced bit, and explicit LAC.
+/// Local / protocol ledger state on a bookie (authoritative CLOSED also in Metadata).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MetaState {
-    /// Accepting adds from the current writer.
+pub enum LedgerState {
+    /// Accepting appends from the current writer.
     Open,
-    /// Fencing / tail recovery in progress.
-    InRecovery,
-    /// Sealed. `last_entry_id` is final.
+    /// Fenced; recovery in progress or writer blocked.
+    Fenced,
+    /// Sealed; immutable.
     Closed,
 }
 
-/// One stored record.
+/// One durable log record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     /// Ledger id.
     pub ledger_id: LedgerId,
     /// Entry id within the ledger.
     pub entry_id: EntryId,
-    /// LastAddConfirmed piggybacked on this add.
+    /// Last Add Confirmed hint carried with the write (BK-style).
     pub lac: i64,
-    /// Opaque payload.
+    /// Opaque payload (message bytes).
     pub payload: Bytes,
 }
 
 impl Entry {
     /// Build an entry.
-    pub fn new(
-        ledger_id: LedgerId,
-        entry_id: EntryId,
-        lac: i64,
-        payload: impl Into<Bytes>,
-    ) -> Self {
+    pub fn new(ledger_id: LedgerId, entry_id: EntryId, lac: i64, payload: impl Into<Bytes>) -> Self {
         Self {
             ledger_id,
             entry_id,

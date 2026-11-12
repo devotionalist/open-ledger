@@ -3,7 +3,7 @@ name = "open-ledger"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Ledger primary store (Journal WAL + ledger storage)"
+description = "BookKeeper-style ledger primary store (Journal WAL + ledger storage) for open-message"
 readme = "../../README.md"
 
 [dependencies]

@@ -8,7 +8,7 @@ Run `openledgerd` + `openledger-autorecovery` on local k3s, with Oxia holding le
 - Sidecar (`openledger-autorecovery`): Oxia registry + Auditor/Worker; HTTP metrics/probes on `:3183`.
 - `openledger-admin`: cluster UI + coordination gauges on `:8080`.
 - Coordination (default): Oxia standalone on `:6648` (`COORD_BACKEND=oxia`).
-- Optional: OpenKV Gateway on `:19000` via `deploy/k8s/overlays/openkv` (`COORD_BACKEND=openkv`).
+- Optional: OpenKV Gateway on `:19000` via `deploy/overlays/openkv` (`COORD_BACKEND=openkv`).
 - Logs: `RUST_LOG_FORMAT=json` in-cluster.
 
 Cluster is Colima `docker+k3s` (`kubectl` context `colima`). Disks use the default `local-path` StorageClass.
@@ -60,7 +60,7 @@ kubectl -n open-ledger get pods -o wide
 Optional OpenKV coordination backend (Gateway must already be reachable as `openkv:19000`):
 
 ```bash
-kubectl apply -k deploy/k8s/overlays/openkv
+kubectl apply -k deploy/overlays/openkv
 ```
 
 Optional Prometheus Operator pack (ServiceMonitor / alerts / Grafana dashboard):

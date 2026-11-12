@@ -25,10 +25,9 @@ A single bookie does not know the ensemble. When `E > Qw`, local entry ids have 
 | Path | Role |
 |---|---|
 | `crates/open-ledger` | `Bookie`, `LocalBookie`, `MemoryBookie`, in-process quorum client, Oxia key layout |
-| `crates/open-ledger-oxia` | Coord backends (**Oxia** / **OpenKV**), registry, election, Auditor, ReplicationWorker |
-| `crates/openledgerd` | Bookie process: gRPC `:3181` + HTTP admin/metrics `:3182` |
-| `crates/openledger-autorecovery` | AutoRecovery sidecar (`:3183` metrics) colocated with the bookie |
-| `crates/openledger-admin` | Cluster UI + Oxia coordination-plane gauges (`:8080`) |
+| `crates/open-ledger-oxia` | `OxiaMetaStore`, registry, election, Auditor, ReplicationWorker ([oxia-client](https://github.com/oxia-db/oxia-client-rust)) |
+| `crates/openledgerd` | Bookie process: local directory + gRPC `:3181` |
+| `crates/openledger-autorecovery` | AutoRecovery sidecar colocated with the bookie |
 | External clients | [open-ledger-client-go](https://github.com/devotionalist/open-ledger-client-go), [rust](https://github.com/devotionalist/open-ledger-client-rust), [java](https://github.com/devotionalist/open-ledger-client-java), [ts](https://github.com/devotionalist/open-ledger-client-ts) — same quorum / recover / PipelineWriter semantics |
 
 ## Reading guide
@@ -47,7 +46,6 @@ A single bookie does not know the ensemble. When `E > Qw`, local entry ids have 
 | AutoRecovery / Oxia keys | [design.md §9](./design.md#9-autorecovery-m3) |
 | Local k3s deploy | [deploy/local-k8s.md](./deploy/local-k8s.md) |
 | Fault-test matrix and scripts | [deploy/failure-tests.md](./deploy/failure-tests.md) |
-| Observability & web admin | [design.md §11](./design.md#11-observability-and-web-admin) |
 
 ## Invariants
 

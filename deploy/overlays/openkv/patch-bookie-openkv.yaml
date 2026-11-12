@@ -10,7 +10,7 @@ spec:
         - name: autorecovery
           args:
             - --coord-backend=openkv
-            - --openkv=openkv.open-ledger.svc.cluster.local:19000
+            - --openkv=gateway.openkv.svc.cluster.local:19000
             - --openkv-ephemeral-ttl-secs=15
             - --bookie-id=$(POD_NAME)
             - --bookie-address=$(POD_NAME).bookie.open-ledger.svc.cluster.local:3181
@@ -29,7 +29,7 @@ spec:
             - name: COORD_BACKEND
               value: openkv
             - name: OPENKV_ADDR
-              value: openkv.open-ledger.svc.cluster.local:19000
+              value: gateway.openkv.svc.cluster.local:19000
             - name: RUST_LOG
               value: info
             - name: RUST_LOG_FORMAT

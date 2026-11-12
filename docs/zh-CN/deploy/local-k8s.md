@@ -9,7 +9,7 @@
 - sidecar（`openledger-autorecovery`）：Oxia 注册 + Auditor/Worker；HTTP 指标/探针 `:3183`。
 - `openledger-admin`：集群 UI + 协调面 gauges，`:8080`。
 - 协调（默认）：Oxia standalone `:6648`（`COORD_BACKEND=oxia`）。
-- 可选：OpenKV Gateway `:19000`，用 `deploy/k8s/overlays/openkv`（`COORD_BACKEND=openkv`）。
+- 可选：OpenKV Gateway `:19000`，用 `deploy/overlays/openkv`（`COORD_BACKEND=openkv`）。
 - 日志：集群内 `RUST_LOG_FORMAT=json`。
 
 集群是 Colima 的 `docker+k3s`（`kubectl` context `colima`）。磁盘用默认 `local-path` StorageClass。
@@ -61,7 +61,7 @@ kubectl -n open-ledger get pods -o wide
 可选 OpenKV 协调后端（Gateway 需已可达 `openkv:19000`）：
 
 ```bash
-kubectl apply -k deploy/k8s/overlays/openkv
+kubectl apply -k deploy/overlays/openkv
 ```
 
 可选 Prometheus Operator 包（ServiceMonitor / 告警 / Grafana dashboard）：
