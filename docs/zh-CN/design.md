@@ -25,7 +25,7 @@ Metadata（外部）     E/Qw/Qa、fragment、CLOSED.lastEntryId、master key
 | AutoRecovery（Auditor + ReplicationWorker） | 其它系统的存储协议兼容层 |
 | `MemoryBookie`（测试 / 嵌入） | |
 
-本仓库 `client` 模块与 `LocalBookie` / `MemoryBookie` 同进程测试。`openledgerd` 在本地目录上提供 gRPC；`openledger-autorecovery` 以 sidecar 连 Oxia 与本机 bookie。外部 client 只要实现同一 `Bookie` 接口，算法不变。
+本仓库 `client` 模块与 `LocalBookie` / `MemoryBookie` 同进程测试。`openledgerd` 在本地目录上提供 **Callback 模型** gRPC（接收只投递，WorkPool 做盘 I/O；见 [async-threading.md](./async-threading.md)）；`openledger-autorecovery` 以 sidecar 连 Oxia 与本机 bookie。外部 client 实现 `Bookie` / `BookieAsync`，算法不变。
 
 ## 2. 复制参数
 
@@ -240,7 +240,7 @@ Fence coverage：每个 write set 窗口里至少 `(Qw - Qa) + 1` 个 bookie 已
 | 阶段 | 状态 |
 |---|---|
 | M0 | 本文的 Bookie 语义、journal 回放、进程内 quorum client。已落地 |
-| M1 | `openledgerd` 的 gRPC（已落地）；k8s bookie STS |
+| M1 | `openledgerd` Callback gRPC（已落地）；k8s bookie STS |
 | M2 | 多进程 ensemble，对换 fragment 做故障注入 |
 | M3 | Oxia metadata + AutoRecovery（Auditor / ReplicationWorker sidecar）。集群 gRPC e2e 已覆盖 |
 

@@ -26,7 +26,8 @@ A single bookie does not know the ensemble. When `E > Qw`, local entry ids have 
 |---|---|
 | `crates/open-ledger` | `Bookie`, `LocalBookie`, `MemoryBookie`, in-process quorum client, Oxia key layout |
 | `crates/open-ledger-oxia` | `OxiaMetaStore`, registry, election, Auditor, ReplicationWorker ([oxia-client](https://github.com/oxia-db/oxia-client-rust)) |
-| `crates/openledgerd` | Bookie process: local directory + gRPC `:3181` |
+| `crates/openledgerd` | Bookie process: local directory + **Callback** gRPC `:3181` (`spawn_blocking` WorkPool) |
+| Threading | [async-threading.md](./async-threading.md) — receive → WorkPool → Finish |
 | `crates/openledger-autorecovery` | AutoRecovery sidecar colocated with the bookie |
 | External clients | [open-ledger-client-go](https://github.com/devotionalist/open-ledger-client-go), [rust](https://github.com/devotionalist/open-ledger-client-rust), [java](https://github.com/devotionalist/open-ledger-client-java), [ts](https://github.com/devotionalist/open-ledger-client-ts) — same quorum / recover / PipelineWriter semantics |
 
@@ -34,6 +35,7 @@ A single bookie does not know the ensemble. When `E > Qw`, local entry ids have 
 
 | Question | Section |
 |---|---|
+| Callback / async receive vs WorkPool | [async-threading.md](./async-threading.md) |
 | Who stores what; where the client lives | [design.md §1 Boundaries](./design.md#1-boundaries) |
 | E / Qw / Qa and write sets | [§2](./design.md#2-replication-parameters) |
 | Metadata vs bookie-local state | [§3](./design.md#3-two-kinds-of-state) |

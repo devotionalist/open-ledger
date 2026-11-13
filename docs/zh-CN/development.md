@@ -78,6 +78,6 @@ macOS 打 Linux 镜像：静态 musl + `scratch`，链接用 `rust-lld`。步骤
 | 阶段 | 合入条件 |
 |---|---|
 | M0 | 单测绿；clippy `-D warnings`；设计文档与代码一致 |
-| M1 | gRPC 可对多 `openledgerd` 跑；杀 1 bookie 仍能 Qa 写（Qa≥2） |
+| M1 | Callback gRPC 可对多 `openledgerd` 跑（[async-threading.md](./async-threading.md)）；杀 1 bookie 仍能 Qa 写（Qa≥2） |
 | M2 | 换 fragment 故障注入场景绿 |
 | M3 | AutoRecovery 不改 entryId/payload；OPEN 账本补副本不绕过 fence |

@@ -77,6 +77,29 @@ impl LocalBookie {
         &self.bookie_id
     }
 
+    /// Whether the ledger is in [`LedgerState::Fenced`].
+    pub fn is_fenced(&self, ledger_id: LedgerId) -> Result<bool> {
+        let g = self.ledgers.lock().expect("ledgers");
+        let handle = g.get(&ledger_id).ok_or(Error::NotFound(ledger_id))?;
+        Ok(handle.meta.state == LedgerState::Fenced)
+    }
+
+    /// Last entry id stored locally, or `-1`.
+    pub fn last_entry_id(&self, ledger_id: LedgerId) -> Result<i64> {
+        let g = self.ledgers.lock().expect("ledgers");
+        let handle = g.get(&ledger_id).ok_or(Error::NotFound(ledger_id))?;
+        Ok(handle.meta.last_entry_id)
+    }
+
+    /// Best-effort durable flush before process exit (journal `sync_all`).
+    ///
+    /// Hot-path appends already fsync; this covers a final barrier for graceful shutdown.
+    pub fn flush(&self) -> Result<()> {
+        let j = self.journal.lock().expect("journal");
+        j.sync_all()?;
+        Ok(())
+    }
+
     fn load_existing(&mut self) -> Result<()> {
         let ledgers_dir = self.root.join("ledgers");
         for ent in fs::read_dir(&ledgers_dir)? {

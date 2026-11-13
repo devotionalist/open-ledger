@@ -43,7 +43,7 @@ cargo run -p openledgerd -- --data-dir /tmp/ol-data --bookie-id bookie-0 --ready
 |---|---|
 | `crates/open-ledger` | `Bookie`、`LocalBookie` / `MemoryBookie`、进程内 quorum client、Oxia key 布局 |
 | `crates/open-ledger-oxia` | 协调后端（Oxia / OpenKV）、registry、election、Auditor、Worker |
-| `crates/openledgerd` | Bookie 进程：gRPC `:3181` + HTTP 管理/指标 `:3182` |
+| `crates/openledgerd` | Bookie 进程：Callback gRPC `:3181`（`spawn_blocking` WorkPool） |
 | `crates/openledger-autorecovery` | 同 Pod AutoRecovery sidecar（`:3183` 指标） |
 | `crates/openledger-admin` | 集群 UI + Oxia 协调面 gauges（`:8080`） |
 | `proto/bookie/v1` | Bookie gRPC 定义 |

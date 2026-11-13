@@ -77,6 +77,6 @@ Every failure mode in design §7 must appear in a unit test or the fault matrix.
 | Milestone | Merge criteria |
 |---|---|
 | M0 | Units green; clippy `-D warnings`; design matches code |
-| M1 | gRPC against multiple `openledgerd`; kill 1 bookie, Qa writes still succeed (Qa≥2) |
+| M1 | Callback gRPC against multiple `openledgerd` ([async-threading.md](./async-threading.md)); kill 1 bookie, Qa writes still succeed (Qa≥2) |
 | M2 | Ensemble-change fault scenarios green |
 | M3 | AutoRecovery does not alter entryId/payload; OPEN-tail rereplicate does not bypass fence |

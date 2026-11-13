@@ -27,7 +27,8 @@ AutoRecovery sidecar      Auditor（选主）+ ReplicationWorker（补到本机 
 |---|---|
 | `crates/open-ledger` | `Bookie`、`LocalBookie`、`MemoryBookie`，同进程 quorum client，Oxia key 布局 |
 | `crates/open-ledger-oxia` | `OxiaMetaStore`、registry、election、Auditor、ReplicationWorker（[oxia-client](https://github.com/oxia-db/oxia-client-rust)） |
-| `crates/openledgerd` | Bookie 进程：本地目录 + gRPC `:3181` |
+| `crates/openledgerd` | Bookie 进程：本地目录 + **Callback** gRPC `:3181`（`spawn_blocking` WorkPool） |
+| 线程模型 | [async-threading.md](./async-threading.md) — 接收 → WorkPool → Finish |
 | `crates/openledger-autorecovery` | 与 bookie 同 Pod 的 AutoRecovery sidecar |
 | 外部客户端 | [open-ledger-client-go](https://github.com/devotionalist/open-ledger-client-go)、[open-ledger-client-rust](https://github.com/devotionalist/open-ledger-client-rust)、[open-ledger-client-java](https://github.com/devotionalist/open-ledger-client-java)、[open-ledger-client-ts](https://github.com/devotionalist/open-ledger-client-ts)（同 quorum / recover / PipelineWriter 语义） |
 
@@ -35,6 +36,7 @@ AutoRecovery sidecar      Auditor（选主）+ ReplicationWorker（补到本机 
 
 | 问题 | 章节 |
 |---|---|
+| Callback / 接收 vs WorkPool | [async-threading.md](./async-threading.md) |
 | 谁存什么、client 放哪 | [design.md §1 边界](./design.md#1-边界) |
 | E / Qw / Qa 与 write set | [§2](./design.md#2-复制参数) |
 | metadata 与 bookie 本地状态 | [§3](./design.md#3-两套状态) |

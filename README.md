@@ -21,7 +21,7 @@ Canonical design: `open-message/docs/design/01-ledger.md`, `17-storage-vs-bookke
 | Crate | Role |
 |---|---|
 | `open-ledger` | Library: types, `MemoryBookie`, `LocalBookie` |
-| `openledgerd` | Bookie process (M0: local dir; RPC later) |
+| `openledgerd` | Bookie process: Callback gRPC `:3181` (`spawn_blocking` WorkPool) |
 
 ## Quick start
 
@@ -45,7 +45,7 @@ cargo run -p openledgerd -- --data-dir /tmp/ol-data --bookie-id bookie-0 --smoke
 | Milestone | Scope |
 |---|---|
 | **M0** | Trait + Memory + Local Journal fsync + unit tests |
-| **M1** | gRPC Bookie service; open-message Go/Rust client adapter |
+| **M1** | Callback gRPC Bookie; Go `BookieAsync` + sync adapter ([docs/async-threading.md](docs/async-threading.md)) |
 | **M2** | True Qw/Qa multi-bookie; fragment change |
 | **M3** | AutoRecovery hooks / Auditor worker |
 

@@ -24,7 +24,7 @@ Metadata (external)    E/Qw/Qa, fragment, CLOSED.lastEntryId, master key
 | AutoRecovery (Auditor + ReplicationWorker) | Compatibility layers for other systems' storage protocols |
 | `MemoryBookie` (test / embed) | |
 
-This repo's `client` module is tested in-process with `LocalBookie` / `MemoryBookie`. `openledgerd` exposes gRPC on a local directory; `openledger-autorecovery` connects as a sidecar to Oxia and the local bookie. An external client only needs to implement the same `Bookie` interface; the algorithms stay the same.
+This repo's `client` module is tested in-process with `LocalBookie` / `MemoryBookie`. `openledgerd` exposes **Callback-model** gRPC on a local directory (receive schedules WorkPool I/O; see [async-threading.md](./async-threading.md)); `openledger-autorecovery` connects as a sidecar to Oxia and the local bookie. External clients implement `Bookie` / `BookieAsync`; the algorithms stay the same.
 
 ## 2. Replication parameters
 
